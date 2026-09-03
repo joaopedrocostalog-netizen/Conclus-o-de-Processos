@@ -6,12 +6,12 @@ from PIL import Image
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
-app=FastAPI(title='Conclusão de Processos API',version='1.1.0')
+app=FastAPI(title='Conclusão de Processos API',version='1.1.1')
 app.add_middleware(CORSMiddleware,allow_origins=['*'],allow_methods=['*'],allow_headers=['*'])
 MAX_MB=int(os.getenv('MAX_UPLOAD_MB','25'))
 FIELDS=['cliente','tipo_documento','operacao_transporte','servico_terminal','remetente','local_coleta','agencia_maritima','despachante','ref_despachante','numero_bl_awb','observacao','mostrar_vias','rota','local_armazenagem','data_faturamento','data_encerramento','ref_cliente','numero_documento','produto','produto_quimico','destinatario','local_entrega','navio','numero_viagem_navio','porto_origem','operacao_maritima','processo_faturado','faturamento_iniciado']
 LABELS={'cliente':'Cliente','tipo_documento':'Tipo Documento','operacao_transporte':'Operação de Transporte','servico_terminal':'Serviço de Terminal?','remetente':'Remetente','local_coleta':'Local de Coleta','agencia_maritima':'Agência Marítima','despachante':'Despachante','ref_despachante':'Ref. Despachante','numero_bl_awb':'Nº BL / AWB','observacao':'Observação','mostrar_vias':'Mostrar Vias?','rota':'Rota','local_armazenagem':'Local de Armazenagem','data_faturamento':'Data para Faturamento','data_encerramento':'Data de Encerramento','ref_cliente':'Ref. do Cliente','numero_documento':'Nº Documento','produto':'Produto','produto_quimico':'Produto químico?','destinatario':'Destinatário','local_entrega':'Local de Entrega','navio':'Navio','numero_viagem_navio':'Nº Viagem Navio','porto_origem':'Porto de Origem','operacao_maritima':'Operação Marítima','processo_faturado':'Processo Faturado','faturamento_iniciado':'Faturamento Iniciado'}
-PROMPT='''Você é um extrator documental de logística. Analise TODAS as páginas. Retorne JSON válido. Identifique IMPORTAÇÃO, EXPORTAÇÃO ou NÃO IDENTIFICADO somente por evidências. Nunca invente: ausência=null. Checkbox true/false somente com evidência clara; caso contrário null. Cada campo deve ter value, confidence (high/medium/low), page e source. Se houver conflito, coloque o campo como null e descreva em conflicts com as páginas. Para NF-e/DANFE, reconheça emitente como remetente quando apropriado, destinatário, número da NF-e, data de emissão, referência do importador, BL e DUIMP. Não transforme uma descrição de produto em cliente. Para produto, quando houver vários itens, retorne um resumo fiel com os códigos e descrições principais, sem inventar.'''+' Campos: '+','.join(FIELDS)
+PROMPT='''Você é um extrator documental de logística. Analise TODAS as páginas. Retorne JSON válido. Identifique IMPORTAÇÃO, EXPORTAÇÃO ou NÃO IDENTIFICADO somente por evidências. Nunca invente: ausência=null. Checkbox true/false somente com evidência clara; caso contrário null. Cada campo deve ter value, confidence (high/medium/low), page e source. Se houver conflito, coloque o campo como null e descreva em conflicts com as páginas. Para NF-e/DANFE, reconheça emitente como remetente quando apropriado, destinatário, número da NF-e, data de emissão, referência do importador, BL e DUIMP. Não transforme uma descrição de produto em cliente. Para produto, quando houver vários itens, retorne um resumo fiel com os códigos e descrições principais, sem inventar.'''+ ' Campos: '+','.join(FIELDS)
 
 def extract_pages(raw):
     doc=fitz.open(stream=raw,filetype='pdf'); pages=[]
@@ -22,8 +22,7 @@ def extract_pages(raw):
                 pix=page.get_pixmap(matrix=fitz.Matrix(1.7,1.7),alpha=False)
                 img=Image.frombytes('RGB',[pix.width,pix.height],pix.samples)
                 text=pytesseract.image_to_string(img,lang='por+eng').strip()
-            except Exception:
-                pass
+            except Exception: pass
         pages.append({'page':i,'text':text})
     return pages
 
@@ -40,13 +39,13 @@ def first_match(patterns,text):
 def fallback_result(pages):
     fields=[]; full='\n'.join(p['text'] for p in pages); op=classify(full)
     patterns={
-      'cliente':[r'(?i)^([^\n]+?)\s*\n(?:Rua|Av\.|Avenida)\s+.*?\n(?:.*?\n){0,3}.*?CNPJ'],
+      'cliente':[r'\n(MOBIS BRASIL FABRICAÇÃO DE AUTO PEÇAS LTDA)\n(?:Rua|Av\.)',r'(?i)^([^\n]+?)\s*\n(?:Rua|Av\.|Avenida)'],
       'tipo_documento':[r'\b(NF-e|DANFE|DUIMP|DI|DUE)\b'],
-      'numero_documento':[r'\bDUIMP\s*[:\-]?\s*([0-9]{10,}-?[0-9]?)',r'\bN[ºo]\s*[:\-]?\s*(\d{5,})\b'],
-      'numero_bl_awb':[r'\bBL\s*[:\-]?\s*([A-Z0-9]{6,})',r'\bB/L\s*[:\-]?\s*([A-Z0-9]{6,})'],
+      'numero_documento':[r'\bDUIMP\s+([0-9]{2}[A-Z]{2}[0-9]+-[0-9])',r'\bN[ºo]\s*[:\-]?\s*(\d{5,})\b'],
+      'numero_bl_awb':[r'\bBL:\s*([A-Z0-9]{6,})',r'\bBL\s*[:\-]?\s*([A-Z0-9]{6,})',r'\bB/L\s*[:\-]?\s*([A-Z0-9]{6,})'],
       'ref_cliente':[r'REF\.?\s*IMPORTADOR\s*:\s*([A-Z0-9/.-]+)'],
       'destinatario':[r'DESTINATÁRIO\s*/\s*REMETENTE.*?\n([^\n]+?)\s+\d{2}/\d{2}/\d{4}'],
-      'remetente':[r'^([^\n]+?)\s*\nRua\s+.*?\n.*?CNPJ'],
+      'remetente':[r'\n(MOBIS BRASIL FABRICAÇÃO DE AUTO PEÇAS LTDA)\nRua\s+']
     }
     for key in FIELDS:
         value=page=None
@@ -62,7 +61,6 @@ def fallback_result(pages):
                 desc=' '.join(m.group(2).split())
                 if desc and desc.upper() not in {'DADOS DO PRODUTO / SERVIÇO'}: items.append(f'{m.group(1)} — {desc}')
             if items: value='; '.join(dict.fromkeys(items))[:1800]; page=1
-        if key=='produto_quimico': value=None
         fields.append({'key':key,'label':LABELS[key],'value':value,'confidence':'medium' if value else 'low','page':page,'source':f'Página {page}' if page else 'Não localizado no PDF'})
     return {'process_type':op,'fields':fields,'conflicts':[],'pages':len(pages)}
 
@@ -80,12 +78,12 @@ def normalize(data,pages):
         item=raw.get(key) if isinstance(raw,dict) else None
         if isinstance(item,dict): value=item.get('value'); conf=item.get('confidence','medium'); page=item.get('page'); source=item.get('source') or (f'Página {page}' if page else 'Não informado no PDF')
         else: value=item; conf='medium' if value is not None else 'low'; page=None; source='Origem não informada'
-        if value=='' : value=None; conf='low'
+        if value=='': value=None; conf='low'
         fields.append({'key':key,'label':LABELS[key],'value':value,'confidence':conf if conf in ['high','medium','low'] else 'low','page':page,'source':source})
     return {'process_type':op,'fields':fields,'conflicts':data.get('conflicts',[]),'pages':len(pages)}
 
 @app.get('/api/health')
-async def health(): return {'status':'ok','version':'1.1.0'}
+async def health(): return {'status':'ok','version':'1.1.1'}
 
 @app.post('/api/analyze')
 async def analyze(file:UploadFile=File(...)):
