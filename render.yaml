@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: conclusao-processos-api
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    healthCheckPath: /api/health
+    envVars:
+      - key: AI_API_URL
+        sync: false
+      - key: AI_API_KEY
+        sync: false
+      - key: AI_MODEL
+        value: gpt-4o-mini
+      - key: MAX_UPLOAD_MB
+        value: "25"
