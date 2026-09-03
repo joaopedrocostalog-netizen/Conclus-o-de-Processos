@@ -4,3 +4,5 @@ python-multipart==0.0.20
 pymupdf==1.25.1
 pydantic==2.10.5
 httpx==0.28.1
+pytesseract==0.3.13
+Pillow==11.1.0
