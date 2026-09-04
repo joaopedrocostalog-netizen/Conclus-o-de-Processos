@@ -17,13 +17,23 @@ function assignFile(input:HTMLInputElement,file:File){
   input.dispatchEvent(new Event('change',{bubbles:true}));
 }
 
+async function waitForAnalyzeButton(timeout=1200){
+  const start=performance.now();
+  while(performance.now()-start<timeout){
+    const button=document.querySelector<HTMLButtonElement>('.app > main .primary');
+    if(button)return button;
+    await new Promise(r=>setTimeout(r,30));
+  }
+  return null;
+}
+
 export async function runValidatedBase(files:ClientProcessFiles){
   const {doc,nf,zip}=files;
   if(!zip&&(!doc||!nf))throw new Error('Para este cliente, DOC COMPLETO e NF FISCAL são obrigatórios quando o modo individual for utilizado.');
 
   const inputs=[...document.querySelectorAll<HTMLInputElement>('.app > main input[type="file"]')];
-  const docInput=inputs.find(i=>/application\/pdf/i.test(i.accept))||inputs[0];
   const pdfInputs=inputs.filter(i=>/application\/pdf/i.test(i.accept));
+  const docInput=pdfInputs[0]||inputs[0];
   const nfInput=pdfInputs[1]||inputs[1];
   const zipInput=inputs.find(i=>/zip/i.test(i.accept))||inputs[2];
   if(!docInput||!nfInput||!zipInput)throw new Error('Não foi possível conectar a tela do cliente ao analisador principal.');
@@ -36,8 +46,7 @@ export async function runValidatedBase(files:ClientProcessFiles){
     assignFile(nfInput,nf!);
   }
 
-  await new Promise(r=>setTimeout(r,30));
-  const analyzeButton=document.querySelector<HTMLButtonElement>('.app > main .primary');
+  const analyzeButton=await waitForAnalyzeButton();
   if(!analyzeButton)throw new Error('Botão de análise não localizado.');
   analyzeButton.click();
 }
