@@ -2,7 +2,8 @@ const ensureClientsTab = () => {
   const app = document.querySelector<HTMLElement>('.app');
   const main = app?.querySelector<HTMLElement>('main');
   const hero = main?.querySelector<HTMLElement>('.hero');
-  if (!app || !main || !hero) return;
+  const header = app?.querySelector<HTMLElement>(':scope > header');
+  if (!app || !main || !hero || !header) return;
   if (app.querySelector('.clients-tab')) return;
 
   const openButton = document.createElement('button');
@@ -14,11 +15,20 @@ const ensureClientsTab = () => {
   clientsPanel.className = 'clients-panel';
   clientsPanel.setAttribute('aria-hidden', 'true');
 
+  const clientsBrand = header.cloneNode(true) as HTMLElement;
+  clientsBrand.classList.add('clients-brand-panel');
+
+  const clientsContent = document.createElement('div');
+  clientsContent.className = 'clients-content-panel';
+
   const backButton = document.createElement('button');
   backButton.type = 'button';
   backButton.className = 'clients-back-tab';
   backButton.textContent = 'Voltar';
-  clientsPanel.appendChild(backButton);
+  clientsContent.appendChild(backButton);
+
+  clientsPanel.appendChild(clientsBrand);
+  clientsPanel.appendChild(clientsContent);
 
   openButton.addEventListener('click', () => {
     app.classList.add('clients-switching');
