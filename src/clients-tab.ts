@@ -31,21 +31,25 @@ const ensureClientsTab = () => {
   clientsPanel.appendChild(clientsContent);
 
   openButton.addEventListener('click', () => {
+    if (app.classList.contains('clients-view-open')) return;
+    clientsPanel.setAttribute('aria-hidden', 'false');
     app.classList.add('clients-switching');
-    window.setTimeout(() => {
+    requestAnimationFrame(() => {
       clientsPanel.classList.add('active');
-      clientsPanel.setAttribute('aria-hidden', 'false');
       app.classList.add('clients-view-open');
-      app.classList.remove('clients-switching');
-    }, 180);
+    });
+    window.setTimeout(() => app.classList.remove('clients-switching'), 380);
   });
 
   backButton.addEventListener('click', () => {
-    clientsPanel.classList.remove('active');
-    clientsPanel.setAttribute('aria-hidden', 'true');
-    app.classList.remove('clients-view-open');
+    if (!app.classList.contains('clients-view-open')) return;
     app.classList.add('clients-returning');
-    window.setTimeout(() => app.classList.remove('clients-returning'), 300);
+    app.classList.remove('clients-view-open');
+    clientsPanel.classList.remove('active');
+    window.setTimeout(() => {
+      clientsPanel.setAttribute('aria-hidden', 'true');
+      app.classList.remove('clients-returning');
+    }, 380);
   });
 
   main.appendChild(openButton);
