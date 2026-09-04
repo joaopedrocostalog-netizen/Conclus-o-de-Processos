@@ -6,6 +6,7 @@ import './matrix-overlay.css';
 import './clients-tab.css';
 import './home-cleanup.css';
 import './report-sources.css';
+import './client-detail-no-scroll.css';
 import './clients-tab';
 import './report-sources';
 
