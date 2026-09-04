@@ -68,7 +68,6 @@ async function readPdfData(data:ArrayBuffer|Uint8Array,kind:DocKind,name:string)
   if (kind==='DOC COMPLETO') for (const n of [4,5]) { const p=pages[n-1]; if(p&&p.text.replace(/\s/g,'').length<35) targets.push(n); }
   if (kind==='NF FISCAL' && pages[0] && !/TRANSPORTADOR\s*\/\s*VOLUMES\s*TRANSPORTADOS|VALOR\s+TOTAL\s+DA\s+NOTA|PESO\s+L[IÍ]QUIDO/i.test(pages[0].text)) targets.push(1);
 
-  // No ZIP não há posição fixa. PDFs digitalizados, como BLs, recebem OCR quando não têm camada de texto útil.
   if (kind==='ZIP PDF') {
     for (const p of pages) {
       const sparse=p.text.replace(/\s/g,'').length<60;
@@ -164,48 +163,123 @@ function analyzeDocuments(results:ReadResult[]):Analysis {
   return {process_type:processType,fields:keys.map(key=>({key,label:labels[key],...values[key]})),pages:results.reduce((a,r)=>a+r.total,0),filename:results.map(r=>r.name).join(' + '),ocr_pages:all.filter(p=>p.ocr).map(p=>`${p.filename} p.${p.page}`),documents:results.map(r=>r.kind)};
 }
 
-function findBlInZip(pages:PdfPage[]):ReturnType<typeof result> {
-  const blPages=[...pages].sort((a,b)=>{
-    const aScore=(/BILL\s+OF\s+LADING|MULTIMODAL\s+TRANSPORT|B\/?L\s*(?:NO|N0|Nº)/i.test(a.text)?10:0)+(/\bBL\b|BILL.?OF.?LADING/i.test(a.filename)?5:0);
-    const bScore=(/BILL\s+OF\s+LADING|MULTIMODAL\s+TRANSPORT|B\/?L\s*(?:NO|N0|Nº)/i.test(b.text)?10:0)+(/\bBL\b|BILL.?OF.?LADING/i.test(b.filename)?5:0);
-    return bScore-aScore;
-  });
-  const patterns=[
-    /B\s*\/\s*L\s*(?:No\.?|N0\.?|Nº|Number)?\s*[:#.-]?\s*([A-Z]{3,6}[A-Z0-9-]{5,})/i,
-    /BILL\s+OF\s+LADING(?:\s*(?:No\.?|Number))?\s*[:#.-]?\s*([A-Z]{3,6}[A-Z0-9-]{5,})/i,
-    /B\s*L\s*(?:No\.?|N0\.?|Nº)?\s*[:#.-]?\s*([A-Z]{3,6}[A-Z0-9-]{5,})/i
-  ];
-  for(const p of blPages){
-    for(const re of patterns){
-      const m=p.text.match(re);
-      if(m?.[1]){
-        const v=normalizeBL(m[1]);
-        if(v && v.length>=8) return result(v,p.page,`${source(p,v)} · identificado no campo B/L No.`,'high');
+function zipPagesBy(pages:PdfPage[],re:RegExp){ return pages.filter(p=>re.test(`${p.filename}\n${p.text}`)); }
+function firstAfterLabelInPages(pages:PdfPage[],label:RegExp,skip:RegExp[]=[]){ for(const p of pages){ const r=afterLabel(p,label,skip); if(r.value)return r; } return result(null,null,'Campo não localizado nos PDFs do ZIP','low'); }
+
+function findZipClient(pages:PdfPage[]):ReturnType<typeof result> {
+  const nfPages=zipPagesBy(pages,/DANFE|NF-?e|NOTA\s+FISCAL|NFE/i);
+  for(const p of nfPages){
+    const ls=lines(p); const start=ls.findIndex(x=>/TRANSPORTADOR\s*\/\s*VOLUMES\s*TRANSPORTADOS/i.test(x));
+    if(start<0)continue;
+    for(let i=start;i<Math.min(start+12,ls.length);i++){
+      if(!/RAZ[AÃ]O\s+SOCIAL/i.test(ls[i]))continue;
+      for(let j=i+1;j<Math.min(i+5,ls.length);j++){
+        const c=ls[j];
+        if(/FRETE\s+POR\s+CONTA|C[ÓO]DIGO\s+ANTT|PLACA\s+DO\s+VE[IÍ]CULO|CNPJ\s*\/\s*CPF|ENDERE[CÇ]O/i.test(c))continue;
+        const company=c.match(/^(.+?)(?:\s+\d+\s*-\s*Dest\/Rem|\s+\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}|$)/i)?.[1]?.trim();
+        if(company&&company.length>3)return result(normalizeCompany(company),p.page,`${source(p,company)} · Transportador / Razão Social`,'high');
       }
     }
+    const block=p.text.match(/TRANSPORTADOR\s*\/\s*VOLUMES\s*TRANSPORTADOS[\s\S]{0,500}?RAZ[AÃ]O\s+SOCIAL[\s\S]{0,180}?\n\s*([^\n]+)/i);
+    if(block?.[1]){
+      const company=block[1].replace(/\s+\d+\s*-\s*Dest\/Rem.*$/i,'').trim();
+      if(company&&!/FRETE|C[ÓO]DIGO\s+ANTT|PLACA/i.test(company))return result(normalizeCompany(company),p.page,`${source(p,company)} · Transportador / Razão Social`,'high');
+    }
   }
-  return result(null,null,'Nº BL / AWB não localizado nos PDFs do ZIP','low');
+  const blPages=zipPagesBy(pages,/BILL\s+OF\s+LADING|MULTIMODAL\s+TRANSPORT|\bBL\b/i);
+  const bl=firstAfterLabelInPages(blPages,/For\s+delivery\s+of\s+goods\s+please\s+apply\s+to\s*:?/i,[/CNPJ|ZIP|AVENIDA|STREET|RUA|B\/L/i]);
+  if(bl.value){bl.value=normalizeCompany(bl.value);bl.source+=' · bloco For delivery of goods';return bl;}
+  return result(null,null,'Cliente não localizado nos blocos de Transportador da NF ou For delivery do BL','low');
+}
+
+function findZipBl(pages:PdfPage[]):ReturnType<typeof result> {
+  const blPages=[...pages].sort((a,b)=>{
+    const sa=(/BILL\s+OF\s+LADING|MULTIMODAL\s+TRANSPORT|B\s*\/\s*L\s*(?:No|N0|Nº)/i.test(a.text)?10:0)+(/\bBL\b|BILL.?OF.?LADING/i.test(a.filename)?6:0);
+    const sb=(/BILL\s+OF\s+LADING|MULTIMODAL\s+TRANSPORT|B\s*\/\s*L\s*(?:No|N0|Nº)/i.test(b.text)?10:0)+(/\bBL\b|BILL.?OF.?LADING/i.test(b.filename)?6:0);
+    return sb-sa;
+  });
+  const patterns=[
+    /B\s*\/\s*L\s*(?:No\.?|N0\.?|Nº|Number)?\s*[:#.-]?\s*([A-Z0-9][A-Z0-9-]{7,})/i,
+    /BILL\s+OF\s+LADING(?:\s*(?:No\.?|Number))?\s*[:#.-]?\s*([A-Z0-9][A-Z0-9-]{7,})/i
+  ];
+  for(const p of blPages)for(const re of patterns){const m=p.text.match(re);if(m?.[1]){const v=normalizeBL(m[1]);if(v&&v.length>=8)return result(v,p.page,`${source(p,v)} · campo B/L No.`,'high')}}
+  for(const p of blPages){
+    const m=p.filename.match(/(?:^|[-_\s])BL(?:[-_\s]+)([A-Z0-9-]{8,})(?:\.pdf)?$/i) || p.filename.match(/([A-Z]{3,6}[A-Z0-9]{6,})\.pdf$/i);
+    if(m?.[1]){const v=normalizeBL(m[1]);if(v&&v.length>=8)return result(v,p.page,`${p.filename} · número identificado no nome do PDF de BL`,'medium')}
+  }
+  return result(null,null,'Nº BL / AWB não localizado no campo B/L No. nem no nome dos PDFs de BL','low');
+}
+
+function findZipStorage(pages:PdfPage[]):ReturnType<typeof result> {
+  const duimpPages=zipPagesBy(pages,/Extrato\s+da\s+Duimp|\bDUIMP\b/i);
+  for(const p of duimpPages){
+    const ls=lines(p);
+    for(let i=0;i<ls.length;i++){
+      if(!/^Recinto\s*:?$/i.test(ls[i])&&!/^Recinto\s*:\s*/i.test(ls[i]))continue;
+      const same=ls[i].replace(/^Recinto\s*:\s*/i,'').trim();
+      if(same.length>5)return result(same,p.page,`${source(p,same)} · campo Recinto`,'high');
+      const next=ls[i+1]; if(next&&/^\d{5,}\s*-\s*/.test(next))return result(next,p.page,`${source(p,next)} · campo Recinto`,'high');
+    }
+    const m=p.text.match(/Recinto\s*:\s*\n\s*([^\n]+)/i);if(m?.[1])return result(one(m[1]),p.page,`${source(p,one(m[1]))} · campo Recinto`,'high');
+  }
+  return result(null,null,'Local de Armazenagem não localizado no campo Recinto da DUIMP','low');
+}
+
+function findZipClientCnpj(pages:PdfPage[]):ReturnType<typeof result> {
+  const nfPages=zipPagesBy(pages,/DANFE|NF-?e|NOTA\s+FISCAL|NFE/i);
+  for(const p of nfPages){
+    const start=p.text.search(/TRANSPORTADOR\s*\/\s*VOLUMES\s*TRANSPORTADOS/i);if(start<0)continue;
+    const tail=p.text.slice(start);const end=tail.search(/DADOS\s+DO\s+PRODUTO\s*\/\s*SERVI[CÇ]O|DADOS\s+DOS\s+PRODUTOS/i);const block=end>0?tail.slice(0,end):tail.slice(0,1500);
+    const all=[...block.matchAll(/\b(\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2})\b/g)];
+    if(all.length){const v=formatCnpj(all[0][1]);return result(v,p.page,`${source(p,v||all[0][1])} · CNPJ/CPF do Transportador`,'high')}
+  }
+  const blPages=zipPagesBy(pages,/BILL\s+OF\s+LADING|MULTIMODAL\s+TRANSPORT|\bBL\b/i);
+  for(const p of blPages){const m=p.text.match(/For\s+delivery\s+of\s+goods\s+please\s+apply\s+to[\s\S]{0,500}?CNPJ\s*(?:NO\.?)?\s*[:.]?\s*([0-9./-]{14,20})/i);if(m?.[1]){const v=formatCnpj(m[1]);return result(v,p.page,`${source(p,v||m[1])} · CNPJ do bloco For delivery`,'high')}}
+  return result(null,null,'CNPJ do Cliente não localizado no quadro Transportador da NF nem no bloco For delivery do BL','low');
+}
+
+function findZipTotalNote(pages:PdfPage[]):ReturnType<typeof result> {
+  const nfPages=zipPagesBy(pages,/DANFE|NF-?e|NOTA\s+FISCAL|NFE/i);
+  for(const p of nfPages){
+    const start=p.text.search(/C[ÁA]LCULO\s+DO\s+IMPOSTO/i);if(start<0)continue;
+    const tail=p.text.slice(start);const end=tail.search(/TRANSPORTADOR\s*\/\s*VOLUMES\s*TRANSPORTADOS/i);const block=end>0?tail.slice(0,end):tail.slice(0,1800);
+    if(!/VALOR\s+TOTAL\s+DA\s+NOTA/i.test(block))continue;
+    const vals=[...block.matchAll(/\b(\d{1,3}(?:\.\d{3})*,\d{2}|\d{4,},\d{2})\b/g)].map(m=>m[1]).filter(v=>numberBR(v)>0);
+    if(vals.length){const v=vals[vals.length-1];return result(`R$ ${v}`,p.page,`${source(p,`R$ ${v}`)} · VALOR TOTAL DA NOTA`,'high')}
+  }
+  return result(null,null,'Valor Total da Nota não localizado no quadro Cálculo do Imposto da NF','low');
+}
+
+function findZipWeight(pages:PdfPage[]):ReturnType<typeof result> {
+  const duimpPages=zipPagesBy(pages,/Extrato\s+da\s+Duimp|\bDUIMP\b/i);
+  for(const p of duimpPages){
+    if(!/Dados\s+da\s+Carga|Recinto|Peso\s+Bruto/i.test(p.text))continue;
+    const m=p.text.match(/Peso\s+L[ií]quido\s*\(kg\)\s*:\s*\n?\s*([0-9.]+,[0-9]{3,5})/i);
+    if(m?.[1])return result(`${m[1]} kg`,p.page,`${source(p,`${m[1]} kg`)} · peso total da carga na DUIMP`,'high');
+  }
+  const nfPages=zipPagesBy(pages,/DANFE|NF-?e|NOTA\s+FISCAL|NFE/i);
+  for(const p of nfPages){const r=weightFromNf(p);if(r.value)return r;}
+  return result(null,null,'Peso Líquido total não localizado na DUIMP nem no quadro Transportador da NF','low');
 }
 
 function analyzeZipResults(results:ReadResult[],zipName:string):Analysis {
   const pages=results.flatMap(r=>r.pages), full=pages.map(p=>p.text).join('\n'); const values:Record<string,ReturnType<typeof result>>={};
   const set=(key:string,patterns:RegExp[])=>{values[key]=find(pages,patterns)};
-  set('cliente',[/For\s+delivery\s+of\s+goods\s+please\s+apply\s+to\s*:?\s*\n?\s*([^\n]+)/i,/TRANSPORTADOR[\s\S]{0,260}?RAZ[AÃ]O\s+SOCIAL\s*\n?\s*([^\n]+)/i,/Nome do importador:\s*\n?\s*([^\n]+)/i,/NOME\s*\/\s*RAZ[AÃ]O\s+SOCIAL\s*\n?\s*([^\n]+)/i]); if(values.cliente.value)values.cliente.value=normalizeCompany(values.cliente.value);
-  const types=[/\bDUIMP\b/i.test(full)?'DUIMP':null,/\bDUE\b/i.test(full)?'DUE':null,/\bDANFE\b|NF-?e/i.test(full)?'NF-e':null,/BILL\s+OF\s+LADING|B\/?L\s*(?:No|N0|Nº)/i.test(full)?'BL':null].filter(Boolean).join(' + '); values.tipo_documento=result(types||null,null,'Tipo(s) identificado(s) nos PDFs do ZIP');
+
+  values.cliente=findZipClient(pages);
+  const types=[/\bDUIMP\b/i.test(full)?'DUIMP':null,/\bDUE\b/i.test(full)?'DUE':null,/\bDANFE\b|NF-?e/i.test(full)?'NF-e':null,/(?:BILL\s+OF\s+LADING|MULTIMODAL\s+TRANSPORT)/i.test(full)||pages.some(p=>/\bBL\b/i.test(p.filename))?'BL':null].filter(Boolean).join(' + '); values.tipo_documento=result(types||null,null,'Tipo(s) identificado(s) nos PDFs do ZIP');
   set('remetente',[/Consignor\s*\/\s*Shipper\s*\n?\s*([^\n]+)/i,/SHIPPER(?:'S)?(?: NAME AND ADDRESS)?\s*[:\-]?\s*\n?\s*([^\n]+)/i,/EXPORTER\s*[:\-]?\s*([^\n]+)/i,/C[oó]digo do Exportador Estrangeiro:\s*\n?\s*(?:OPE_\d+\s*-\s*)?([^\n]+)/i]); if(values.remetente.value)values.remetente.value=normalizeCompany(values.remetente.value);
-
-  // BL no ZIP tem regra própria: prioriza documentos com layout de Bill of Lading e lê o campo "B/L No." por OCR quando necessário.
-  values.numero_bl_awb=findBlInZip(pages);
-
-  set('local_armazenagem',[/Recinto Alfandeg[aá]rio\.{0,10}:\s*([^\n]+)/i,/Setor Alfandeg[aá]rio\.{0,10}:\s*([^\n]+)/i,/(?:TERMINAL|WAREHOUSE|PLACE OF STORAGE)\s*[:\-]?\s*([^\n]+)/i]);
+  values.numero_bl_awb=findZipBl(pages);
+  values.local_armazenagem=findZipStorage(pages);
   set('ref_cliente',[/Refer[eê]ncia do cliente\s*(?:-&gt;|->|:)\s*([A-Z0-9./-]+)/i,/REF\.?\s*IMPORTADOR\.{0,10}:\s*([A-Z0-9./-]+)/i,/REF\.?\s*EXPORTADOR\.{0,10}:\s*([A-Z0-9./-]+)/i,/Nossa Refer[eê]ncia\.{0,10}:\s*([A-Z0-9./-]+)/i,/INVOICE\s*(?:->|:)?\s*([A-Z0-9./-]+)/i]);
   set('numero_documento',[/Extrato da Duimp\s+([0-9A-Z-]{10,25})/i,/\bDUIMP\s*[:.]?\s*([0-9A-Z-]{10,25})/i,/\bDUE\s*[:.]?\s*([0-9A-Z-]{10,25})/i,/NUMERO\s+DI\s*:\s*([0-9A-Z-]{10,25})/i]);
   set('destinatario',[/Nome do importador:\s*\n?\s*([^\n]+)/i,/Consignee(?:\s*\/\s*Importer)?\s*\n?\s*([^\n]+)/i,/DESTINAT[ÁA]RIO\s*\/\s*REMETENTE[\s\S]{0,180}?NOME\s*\/\s*RAZ[AÃ]O\s+SOCIAL\s*\n?\s*([^\n]+)/i]); if(values.destinatario.value)values.destinatario.value=normalizeCompany(values.destinatario.value);
   const processType=processTypeFrom(full); values.operacao_maritima=result(processType==='IMPORTAÇÃO'?'Importação':processType==='EXPORTAÇÃO'?'Exportação':null,null,'Operação inferida pelo conjunto de PDFs do ZIP');
-  set('cnpj_cliente',[/For\s+delivery\s+of\s+goods\s+please\s+apply\s+to[\s\S]{0,500}?CNPJ\s*(?:NO\.?)?\s*[:.]?\s*([0-9./-]{14,20})/i,/TRANSPORTADOR[\s\S]{0,800}?CNPJ\s*\/\s*CPF[\s\S]{0,120}?([0-9./-]{14,20})/i,/CNPJ\s*(?:NO\.?|N[ºO])?\s*[:.]?\s*([0-9]{2}\.?[0-9]{3}\.?[0-9]{3}\/?[0-9]{4}-?[0-9]{2})/i]); if(values.cnpj_cliente.value)values.cnpj_cliente.value=formatCnpj(values.cnpj_cliente.value);
+  values.cnpj_cliente=findZipClientCnpj(pages);
   const containers=[...full.matchAll(/\b[A-Z]{4}\s*\d{7}\b/gi)].map(m=>m[0].replace(/\s/g,'').toUpperCase()); values.conteineres=result(containers.length?[...new Set(containers)].join(' / '):null,null,containers.length?'Contêineres encontrados ao longo dos PDFs do ZIP':'Contêineres não localizados');
-  set('peso_liquido',[/Peso\s+L[ií]quido\s*(?:\(kg\))?\s*[:\-]?\s*([0-9.]+,[0-9]{3,5})/i,/PESO\s+L[IÍ]QUIDO\s*[:\-]?\s*([0-9.]+,[0-9]{3,5})/i,/NET WEIGHT(?:\s*\(KG\))?\s*[:\-]?\s*([0-9.]+,[0-9]{3,5})/i]); if(values.peso_liquido.value&&!/kg$/i.test(values.peso_liquido.value))values.peso_liquido.value+=' kg';
-  set('valor_total_nota',[/VALOR\s+TOTAL\s+DA\s+NOTA[\s\S]{0,260}?([0-9]{1,3}(?:\.[0-9]{3})*,[0-9]{2})/i,/TOTAL\s+(?:DA\s+)?NOTA\s*[:\-]?\s*(?:R\$\s*)?([0-9.]+,[0-9]{2})/i]); if(values.valor_total_nota.value&&!/^R\$/i.test(values.valor_total_nota.value))values.valor_total_nota.value=`R$ ${values.valor_total_nota.value}`;
+  values.peso_liquido=findZipWeight(pages);
+  values.valor_total_nota=findZipTotalNote(pages);
+
   return {process_type:processType,fields:keys.map(key=>({key,label:labels[key],...values[key]})),pages:results.reduce((a,r)=>a+r.total,0),filename:zipName,ocr_pages:pages.filter(p=>p.ocr).map(p=>`${p.filename} p.${p.page}`),documents:[`${results.length} PDF(s) dentro do ZIP`]};
 }
 async function analyzeZip(file:File):Promise<Analysis> {
@@ -225,5 +299,5 @@ export default function App(){
   const report=useMemo(()=>analysis?analysis.fields.map(f=>`${f.label}: ${f.value??'Não localizado'}`).join('\n'):'',[analysis]); const found=analysis?.fields.filter(f=>f.value).length??0;
   const picker=(title:string,file:File|null,setter:(f:File|null)=>void,ref:React.RefObject<HTMLInputElement>,icon:any,accept:string,onPick:(f:File)=>boolean)=><div className="upload" onClick={()=>ref.current?.click()}><input ref={ref} type="file" accept={accept} hidden onChange={e=>{const f=e.target.files?.[0];if(f&&onPick(f)){setter(f);setAnalysis(null)}}}/><div className="upload-icon">{icon}</div><h2>{file?file.name:title}</h2><p>{file?'Arquivo pronto para análise':'clique para selecionar'}</p>{file&&<button className="icon-btn" onClick={e=>{e.stopPropagation();setter(null)}}><X/></button>}</div>;
 
-  return <div className="app"><div className="grid-bg"/><header><div className="brand"><div className="brand-mark"><Sparkles size={19}/></div><div><strong>Conclusão de Processos</strong><span>Extração e conferência cruzada</span></div></div><div className="header-status"><span className="live-dot"/> Sistema operacional</div></header><main>{!analysis?<section className="hero"><div className="eyebrow"><Zap size={15}/> PDFs individuais ou pacote ZIP</div><h1>Escolha o modo de análise.<br/><em>Os mesmos campos, regras diferentes.</em></h1><p className="lead">DOC COMPLETO + NF mantém todas as regras específicas já validadas. Na área ZIP, todos os PDFs internos são lidos; BLs digitalizados recebem OCR e o número é buscado especificamente no campo “B/L No.”.</p><div className="dual-upload">{picker('DOC COMPLETO',docFile,setDocFile,docRef,<FileText/>,'application/pdf,.pdf',f=>{if(!validPdf(f))return false;setZipFile(null);return true})}{picker('NF Fiscal (opcional)',nfFile,setNfFile,nfRef,<FilePlus2/>,'application/pdf,.pdf',f=>{if(!validPdf(f))return false;setZipFile(null);return true})}</div><div style={{marginTop:16}}>{picker('Pacote .ZIP com PDFs',zipFile,setZipFile,zipRef,<Archive/>,'.zip,application/zip',f=>{if(!validZip(f))return false;setDocFile(null);setNfFile(null);return true})}</div>{error&&<div className="error"><AlertTriangle size={18}/>{error}</div>}{(docFile||nfFile||zipFile)&&<button className="primary" onClick={analyze} disabled={busy}>{busy?<><Loader2 className="spin"/> {zipFile?'Abrindo ZIP e lendo PDFs...':'Lendo e cruzando PDFs...'}</>:<>Analisar Processo <ChevronRight/></>}</button>}</section>:<section className="results"><div className="result-head"><div><div className="eyebrow"><Check size={15}/> Análise concluída</div><h1>Informações necessárias</h1><p>{analysis.documents.join(' + ')} · {found}/{analysis.fields.length} campos localizados</p></div><button className="secondary" onClick={()=>setAnalysis(null)}><RotateCcw size={16}/> Nova análise</button></div><div className="metrics"><div className="metric"><span>Operação</span><b className="type">{analysis.process_type}</b></div><div className="metric"><span>Campos encontrados</span><b>{found}<small>/{analysis.fields.length}</small></b></div><div className="metric"><span>Escopo</span><b>{zipFile?'Todos os PDFs do ZIP':'Todas as páginas'}</b></div></div><div className="table"><div className="table-head"><span>Campo</span><span>Valor extraído</span><span>Confiança</span><span>Fonte / Conferência</span><span/></div>{analysis.fields.map(f=><div className="row" key={f.key}><div><b>{f.label}</b>{f.edited&&<small className="edited">Editado manualmente</small>}</div><div>{f.value===null?<span className="not-found">Não localizado no documento</span>:<input value={f.value} onChange={e=>update(f.key,e.target.value)}/>}</div><div><span className={`confidence ${f.confidence}`}>{f.confidence==='high'?'✓':f.confidence==='medium'?'⚠':'?'} {f.confidence==='high'?'Alta confiança':f.confidence==='medium'?'Revisar':'Baixa confiança'}</span></div><div className="source">{f.source}</div><button className="copy" onClick={()=>void navigator.clipboard?.writeText(f.value??'')}><Clipboard size={15}/></button></div>)}</div><div className="integrity"><div className="shield">✓</div><div><b>{zipFile?'Modo ZIP com identificação de BL':'Leitura otimizada sem reduzir o escopo'}</b><span>{zipFile?'O sistema procura o BL em documentos de Bill of Lading, inclusive PDFs escaneados, priorizando o campo B/L No. e mostrando o arquivo/página de origem.':'As regras específicas já validadas continuam ativas para DOC COMPLETO + NF.'}</span></div><button className="secondary" onClick={()=>void navigator.clipboard?.writeText(report)}><Clipboard size={16}/> Copiar relatório</button></div></section>}</main><footer><span>CONCLUSÃO DE PROCESSOS · foco em precisão</span><span>PDF + ZIP</span></footer></div>;
+  return <div className="app"><div className="grid-bg"/><header><div className="brand"><div className="brand-mark"><Sparkles size={19}/></div><div><strong>Conclusão de Processos</strong><span>Extração e conferência cruzada</span></div></div><div className="header-status"><span className="live-dot"/> Sistema operacional</div></header><main>{!analysis?<section className="hero"><div className="eyebrow"><Zap size={15}/> PDFs individuais ou pacote ZIP</div><h1>Escolha o modo de análise.<br/><em>Os mesmos campos, regras diferentes.</em></h1><p className="lead">DOC COMPLETO + NF mantém todas as regras específicas já validadas. No ZIP, cada tipo de documento é reconhecido pelo conteúdo: NF para cliente/CNPJ/valor, DUIMP para recinto/peso e BL para B/L No.</p><div className="dual-upload">{picker('DOC COMPLETO',docFile,setDocFile,docRef,<FileText/>,'application/pdf,.pdf',f=>{if(!validPdf(f))return false;setZipFile(null);return true})}{picker('NF Fiscal (opcional)',nfFile,setNfFile,nfRef,<FilePlus2/>,'application/pdf,.pdf',f=>{if(!validPdf(f))return false;setZipFile(null);return true})}</div><div style={{marginTop:16}}>{picker('Pacote .ZIP com PDFs',zipFile,setZipFile,zipRef,<Archive/>,'.zip,application/zip',f=>{if(!validZip(f))return false;setDocFile(null);setNfFile(null);return true})}</div>{error&&<div className="error"><AlertTriangle size={18}/>{error}</div>}{(docFile||nfFile||zipFile)&&<button className="primary" onClick={analyze} disabled={busy}>{busy?<><Loader2 className="spin"/> {zipFile?'Abrindo ZIP e lendo PDFs...':'Lendo e cruzando PDFs...'}</>:<>Analisar Processo <ChevronRight/></>}</button>}</section>:<section className="results"><div className="result-head"><div><div className="eyebrow"><Check size={15}/> Análise concluída</div><h1>Informações necessárias</h1><p>{analysis.documents.join(' + ')} · {found}/{analysis.fields.length} campos localizados</p></div><button className="secondary" onClick={()=>setAnalysis(null)}><RotateCcw size={16}/> Nova análise</button></div><div className="metrics"><div className="metric"><span>Operação</span><b className="type">{analysis.process_type}</b></div><div className="metric"><span>Campos encontrados</span><b>{found}<small>/{analysis.fields.length}</small></b></div><div className="metric"><span>Escopo</span><b>{zipFile?'Todos os PDFs do ZIP':'Todas as páginas'}</b></div></div><div className="table"><div className="table-head"><span>Campo</span><span>Valor extraído</span><span>Confiança</span><span>Fonte / Conferência</span><span/></div>{analysis.fields.map(f=><div className="row" key={f.key}><div><b>{f.label}</b>{f.edited&&<small className="edited">Editado manualmente</small>}</div><div>{f.value===null?<span className="not-found">Não localizado no documento</span>:<input value={f.value} onChange={e=>update(f.key,e.target.value)}/>}</div><div><span className={`confidence ${f.confidence}`}>{f.confidence==='high'?'✓':f.confidence==='medium'?'⚠':'?'} {f.confidence==='high'?'Alta confiança':f.confidence==='medium'?'Revisar':'Baixa confiança'}</span></div><div className="source">{f.source}</div><button className="copy" onClick={()=>void navigator.clipboard?.writeText(f.value??'')}><Clipboard size={15}/></button></div>)}</div><div className="integrity"><div className="shield">✓</div><div><b>{zipFile?'Modo ZIP por tipo de documento':'Leitura otimizada sem reduzir o escopo'}</b><span>{zipFile?'Cliente e CNPJ vêm do Transportador da NF, armazenagem do Recinto da DUIMP, B/L do Bill of Lading e Valor Total do quadro correto da NF.':'As regras específicas já validadas continuam ativas para DOC COMPLETO + NF.'}</span></div><button className="secondary" onClick={()=>void navigator.clipboard?.writeText(report)}><Clipboard size={16}/> Copiar relatório</button></div></section>}</main><footer><span>CONCLUSÃO DE PROCESSOS · foco em precisão</span><span>PDF + ZIP</span></footer></div>;
 }
