@@ -4,6 +4,7 @@ import App from './App';
 import './styles.css';
 import './matrix-overlay.css';
 import './clients-tab.css';
+import './home-cleanup.css';
 import './clients-tab';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
