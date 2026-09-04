@@ -172,11 +172,17 @@ const ensureClientsTab = () => {
     reportView.setAttribute('aria-hidden','false');
     reportView.scrollTop=0;
 
-    reportView.querySelector('.client-report-back')?.addEventListener('click',()=>{
+    reportView.querySelector('.client-report-back')?.addEventListener('click',async()=>{
+      // O analisador principal fica com a tela de resultados ativa por baixo do painel
+      // do cliente. Antes, ao voltar, isso mantinha o :has(.results) do App e fazia
+      // o cartão da GLOVIS herdar as dimensões largas do relatório principal.
+      // Resetamos somente essa camada oculta antes de restaurar a tela do cliente.
+      await resetValidatedBase();
       hideViews();
       detailView.classList.add('active');
       detailView.setAttribute('aria-hidden','false');
       detailView.scrollTop=0;
+      refreshClientFiles();
     });
     reportView.querySelector('.client-report-new')?.addEventListener('click',async()=>{
       await resetValidatedBase();
