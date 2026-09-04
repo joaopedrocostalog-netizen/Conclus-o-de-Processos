@@ -189,14 +189,43 @@ function weightFromDoc(p?:PdfPage) {
 
 function weightFromNf(p?:PdfPage) {
   if (!p) return result(null,null,'NF Fiscal não enviada','low');
-  const idx=p.text.search(/PESO\s+L[IÍ]QUIDO/i);
-  if (idx<0) return result(null,null,'NF FISCAL · página 1: “PESO LÍQUIDO” não localizado','low');
-  const window=p.text.slice(idx,idx+450);
-  const candidates=[...window.matchAll(/\b(\d{1,3}(?:\.\d{3})*,\d{3,5}|\d{4,},\d{3,5})\b/g)].map(m=>m[1]);
-  const valid=candidates.filter(v=>numberBR(v)>100);
-  if (!valid.length) return result(null,null,'NF FISCAL · página 1: valor do PESO LÍQUIDO não localizado','low');
-  const value=valid[valid.length-1];
-  return result(`${value} kg`,1,`NF FISCAL · página 1 · PESO LÍQUIDO: ${value}`);
+
+  // Em DANFEs, o Peso Líquido pertence ao quadro “TRANSPORTADOR / VOLUMES TRANSPORTADOS”.
+  // A busca fica limitada a esse quadro para não capturar VL. UNITÁRIO, quantidade ou valores dos produtos.
+  const transportStart=p.text.search(/TRANSPORTADOR\s*\/\s*VOLUMES\s*TRANSPORTADOS/i);
+  if (transportStart<0) return result(null,null,'NF FISCAL · página 1: quadro “TRANSPORTADOR / VOLUMES TRANSPORTADOS” não localizado','low');
+
+  const afterTransport=p.text.slice(transportStart);
+  const productStart=afterTransport.search(/DADOS\s+DO\s+PRODUTO\s*\/\s*SERVI[CÇ]O|DADOS\s+DOS\s+PRODUTOS|C[ÓO]DIGO\s+PRODUTO/i);
+  const block=productStart>0 ? afterTransport.slice(0,productStart) : afterTransport.slice(0,2600);
+
+  const labelIndex=block.search(/PESO\s+L[IÍ]QUIDO/i);
+  if (labelIndex<0) return result(null,null,'NF FISCAL · página 1: “PESO LÍQUIDO” não localizado no quadro do transportador','low');
+
+  // Primeiro tenta o valor imediatamente associado ao rótulo.
+  const direct=block.slice(labelIndex,labelIndex+220).match(/PESO\s+L[IÍ]QUIDO\s*[:\-]?\s*([0-9]{1,3}(?:\.\d{3})*,\d{3,5}|[0-9]{4,},\d{3,5})/i);
+  if (direct?.[1] && numberBR(direct[1])>0) {
+    return result(`${direct[1]} kg`,1,`NF FISCAL · página 1 · Transportador / Volumes Transportados → PESO LÍQUIDO: ${direct[1]}`);
+  }
+
+  // Se o PDF separou rótulo e valor em linhas distintas, procura somente nas linhas seguintes do mesmo quadro.
+  const lines=block.split(/\n+/).map(one).filter(Boolean);
+  const lineIndex=lines.findIndex(line=>/PESO\s+L[IÍ]QUIDO/i.test(line));
+  if (lineIndex>=0) {
+    const sameLine=lines[lineIndex].match(/PESO\s+L[IÍ]QUIDO[^0-9]*([0-9]{1,3}(?:\.\d{3})*,\d{3,5}|[0-9]{4,},\d{3,5})/i);
+    if (sameLine?.[1] && numberBR(sameLine[1])>0) {
+      return result(`${sameLine[1]} kg`,1,`NF FISCAL · página 1 · Transportador / Volumes Transportados → PESO LÍQUIDO: ${sameLine[1]}`);
+    }
+    for (let i=lineIndex+1;i<Math.min(lineIndex+4,lines.length);i++) {
+      if (/VL\.?\s*UNIT|VALOR\s+UNIT|QUANTIDADE|PESO\s+BRUTO|MARCA|NUMERA[CÇ][AÃ]O/i.test(lines[i])) continue;
+      const m=lines[i].match(/\b([0-9]{1,3}(?:\.\d{3})*,\d{3,5}|[0-9]{4,},\d{3,5})\b/);
+      if (m?.[1] && numberBR(m[1])>0) {
+        return result(`${m[1]} kg`,1,`NF FISCAL · página 1 · Transportador / Volumes Transportados → PESO LÍQUIDO: ${m[1]}`);
+      }
+    }
+  }
+
+  return result(null,null,'NF FISCAL · página 1: valor do PESO LÍQUIDO não localizado dentro do quadro do transportador','low');
 }
 
 function totalFromNf(p?:PdfPage) {
@@ -254,9 +283,10 @@ function analyzeDocuments(results:ReadResult[]):Analysis {
   const pesoDoc=weightFromDoc(doc5), pesoNf=weightFromNf(nf1);
   if (pesoDoc.value&&pesoNf.value) {
     const a=numberBR(pesoDoc.value.replace(/\s*kg/i,'')), b=numberBR(pesoNf.value.replace(/\s*kg/i,''));
-    const same=Math.abs(a-b)<=0.01;
-    values.peso_liquido=result(pesoNf.value,1,same?`Confirmado nos 2 PDFs: DOC COMPLETO p.5 = ${pesoDoc.value} | NF FISCAL p.1 = ${pesoNf.value}`:`Revisar: DOC COMPLETO p.5 = ${pesoDoc.value} | NF FISCAL p.1 = ${pesoNf.value}`,same?'high':'medium');
-  } else values.peso_liquido=pesoNf.value?pesoNf:pesoDoc;
+    const same=Math.abs(a-b)<=0.05;
+    // DOC COMPLETO é a fonte principal. A NF apenas confirma; se divergir, não substitui o valor correto do DOC.
+    values.peso_liquido=result(pesoDoc.value,5,same?`Confirmado nos 2 PDFs: DOC COMPLETO p.5 = ${pesoDoc.value} | NF FISCAL p.1 (quadro Transportador/Volumes) = ${pesoNf.value}`:`Revisar NF: DOC COMPLETO p.5 = ${pesoDoc.value} | NF FISCAL p.1 (quadro Transportador/Volumes) = ${pesoNf.value}. Mantido o DOC COMPLETO como fonte principal.`,same?'high':'medium');
+  } else values.peso_liquido=pesoDoc.value?pesoDoc:pesoNf;
 
   values.valor_total_nota=totalFromNf(nf1);
 
@@ -288,5 +318,5 @@ export default function App() {
   const found=analysis?.fields.filter(f=>f.value).length??0;
   const picker=(title:string,file:File|null,setter:(f:File|null)=>void,ref:React.RefObject<HTMLInputElement>,icon:any)=><div className="upload" onClick={()=>ref.current?.click()}><input ref={ref} type="file" accept="application/pdf,.pdf" hidden onChange={e=>{const f=e.target.files?.[0];if(f&&valid(f)){setter(f);setAnalysis(null)}}}/><div className="upload-icon">{icon}</div><h2>{file?file.name:title}</h2><p>{file?'PDF pronto para cruzamento':'clique para selecionar'}</p>{file&&<button className="icon-btn" onClick={e=>{e.stopPropagation();setter(null)}}><X/></button>}</div>;
 
-  return <div className="app"><div className="grid-bg"/><header><div className="brand"><div className="brand-mark"><Sparkles size={19}/></div><div><strong>Conclusão de Processos</strong><span>Extração e conferência cruzada</span></div></div><div className="header-status"><span className="live-dot"/> Sistema operacional</div></header><main>{!analysis?<section className="hero"><div className="eyebrow"><Zap size={15}/> Precisão por posição do documento</div><h1>DOC COMPLETO + NF.<br/><em>Dados conferidos entre si.</em></h1><p className="lead">O Peso Líquido é conferido entre a página 5 do DOC COMPLETO e a página 1 da NF. O Valor Total da Nota é lido exclusivamente na página 1 da NF, diretamente no campo “VALOR TOTAL DA NOTA”.</p><div className="dual-upload">{picker('DOC COMPLETO',docFile,setDocFile,docRef,<FileText/>)}{picker('NF Fiscal (opcional)',nfFile,setNfFile,nfRef,<FilePlus2/>)}</div>{error&&<div className="error"><AlertTriangle size={18}/>{error}</div>}{(docFile||nfFile)&&<button className="primary" onClick={analyze} disabled={busy}>{busy?<><Loader2 className="spin"/> Lendo e cruzando PDFs...</>:<>Analisar Processo <ChevronRight/></>}</button>}</section>:<section className="results"><div className="result-head"><div><div className="eyebrow"><Check size={15}/> Análise concluída</div><h1>Informações necessárias</h1><p>{analysis.documents.join(' + ')} · {found}/{analysis.fields.length} campos localizados</p></div><button className="secondary" onClick={()=>setAnalysis(null)}><RotateCcw size={16}/> Nova análise</button></div><div className="metrics"><div className="metric"><span>Operação</span><b className="type">{analysis.process_type}</b></div><div className="metric"><span>Campos encontrados</span><b>{found}<small>/{analysis.fields.length}</small></b></div><div className="metric"><span>Escopo</span><b>Todas as páginas</b></div></div><div className="table"><div className="table-head"><span>Campo</span><span>Valor extraído</span><span>Confiança</span><span>Fonte / Conferência</span><span/></div>{analysis.fields.map(f=><div className="row" key={f.key}><div><b>{f.label}</b>{f.edited&&<small className="edited">Editado manualmente</small>}</div><div>{f.value===null?<span className="not-found">Não localizado no documento</span>:<input value={f.value} onChange={e=>update(f.key,e.target.value)}/>}</div><div><span className={`confidence ${f.confidence}`}>{f.confidence==='high'?'✓':f.confidence==='medium'?'⚠':'?'} {f.confidence==='high'?'Alta confiança':f.confidence==='medium'?'Revisar':'Baixa confiança'}</span></div><div className="source">{f.source}</div><button className="copy" onClick={()=>void navigator.clipboard?.writeText(f.value??'')}><Clipboard size={15}/></button></div>)}</div><div className="integrity"><div className="shield">✓</div><div><b>Leitura posicional dos valores</b><span>Peso Líquido não usa mais números vizinhos como Quantidade. Valor Total ignora zeros e busca o valor monetário do campo correto.</span></div><button className="secondary" onClick={()=>void navigator.clipboard?.writeText(report)}><Clipboard size={16}/> Copiar relatório</button></div></section>}</main><footer><span>CONCLUSÃO DE PROCESSOS · foco em precisão</span><span>DOC COMPLETO + NF Fiscal</span></footer></div>;
+  return <div className="app"><div className="grid-bg"/><header><div className="brand"><div className="brand-mark"><Sparkles size={19}/></div><div><strong>Conclusão de Processos</strong><span>Extração e conferência cruzada</span></div></div><div className="header-status"><span className="live-dot"/> Sistema operacional</div></header><main>{!analysis?<section className="hero"><div className="eyebrow"><Zap size={15}/> Precisão por posição do documento</div><h1>DOC COMPLETO + NF.<br/><em>Dados conferidos entre si.</em></h1><p className="lead">O Peso Líquido usa o DOC COMPLETO página 5 como fonte principal. Na NF, a conferência fica restrita ao quadro “TRANSPORTADOR / VOLUMES TRANSPORTADOS”, na célula “PESO LÍQUIDO”, evitando confusão com VL. UNITÁRIO ou valores dos produtos.</p><div className="dual-upload">{picker('DOC COMPLETO',docFile,setDocFile,docRef,<FileText/>)}{picker('NF Fiscal (opcional)',nfFile,setNfFile,nfRef,<FilePlus2/>)}</div>{error&&<div className="error"><AlertTriangle size={18}/>{error}</div>}{(docFile||nfFile)&&<button className="primary" onClick={analyze} disabled={busy}>{busy?<><Loader2 className="spin"/> Lendo e cruzando PDFs...</>:<>Analisar Processo <ChevronRight/></>}</button>}</section>:<section className="results"><div className="result-head"><div><div className="eyebrow"><Check size={15}/> Análise concluída</div><h1>Informações necessárias</h1><p>{analysis.documents.join(' + ')} · {found}/{analysis.fields.length} campos localizados</p></div><button className="secondary" onClick={()=>setAnalysis(null)}><RotateCcw size={16}/> Nova análise</button></div><div className="metrics"><div className="metric"><span>Operação</span><b className="type">{analysis.process_type}</b></div><div className="metric"><span>Campos encontrados</span><b>{found}<small>/{analysis.fields.length}</small></b></div><div className="metric"><span>Escopo</span><b>Todas as páginas</b></div></div><div className="table"><div className="table-head"><span>Campo</span><span>Valor extraído</span><span>Confiança</span><span>Fonte / Conferência</span><span/></div>{analysis.fields.map(f=><div className="row" key={f.key}><div><b>{f.label}</b>{f.edited&&<small className="edited">Editado manualmente</small>}</div><div>{f.value===null?<span className="not-found">Não localizado no documento</span>:<input value={f.value} onChange={e=>update(f.key,e.target.value)}/>}</div><div><span className={`confidence ${f.confidence}`}>{f.confidence==='high'?'✓':f.confidence==='medium'?'⚠':'?'} {f.confidence==='high'?'Alta confiança':f.confidence==='medium'?'Revisar':'Baixa confiança'}</span></div><div className="source">{f.source}</div><button className="copy" onClick={()=>void navigator.clipboard?.writeText(f.value??'')}><Clipboard size={15}/></button></div>)}</div><div className="integrity"><div className="shield">✓</div><div><b>Leitura posicional do Peso Líquido</b><span>Na NF, o sistema só aceita o peso dentro do quadro Transportador / Volumes Transportados. Se NF e DOC divergirem, o valor do DOC COMPLETO permanece como principal.</span></div><button className="secondary" onClick={()=>void navigator.clipboard?.writeText(report)}><Clipboard size={16}/> Copiar relatório</button></div></section>}</main><footer><span>CONCLUSÃO DE PROCESSOS · foco em precisão</span><span>DOC COMPLETO + NF Fiscal</span></footer></div>;
 }
