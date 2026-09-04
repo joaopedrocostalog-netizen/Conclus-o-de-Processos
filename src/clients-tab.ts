@@ -107,6 +107,7 @@ const ensureClientsTab = () => {
   clientsPanel.appendChild(clientsContent);
 
   const hideViews=()=>{
+    clientsPanel.classList.remove('report-mode');
     listView.classList.remove('active','leaving');
     detailView.classList.remove('active');
     reportView.classList.remove('active');
@@ -122,6 +123,7 @@ const ensureClientsTab = () => {
   };
 
   const showClientDetail = () => {
+    clientsPanel.classList.remove('report-mode');
     listView.classList.add('leaving');
     window.setTimeout(() => {
       hideViews();
@@ -165,6 +167,7 @@ const ensureClientsTab = () => {
       <button type="button" class="client-report-new">Nova análise ${GLOVIS_PROFILE.name}</button>
     `;
     hideViews();
+    clientsPanel.classList.add('report-mode');
     reportView.classList.add('active');
     reportView.setAttribute('aria-hidden','false');
     reportView.scrollTop=0;
