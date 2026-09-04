@@ -1,8 +1,9 @@
 const ensureClientsTab = () => {
-  const main = document.querySelector('main');
+  const app = document.querySelector<HTMLElement>('.app');
+  const main = app?.querySelector<HTMLElement>('main');
   const hero = main?.querySelector<HTMLElement>('.hero');
-  if (!main || !hero) return;
-  if (main.querySelector('.clients-tab')) return;
+  if (!app || !main || !hero) return;
+  if (app.querySelector('.clients-tab')) return;
 
   const openButton = document.createElement('button');
   openButton.type = 'button';
@@ -20,29 +21,25 @@ const ensureClientsTab = () => {
   clientsPanel.appendChild(backButton);
 
   openButton.addEventListener('click', () => {
-    hero.classList.add('card-view-leave');
+    app.classList.add('clients-switching');
     window.setTimeout(() => {
-      hero.style.display = 'none';
       clientsPanel.classList.add('active');
       clientsPanel.setAttribute('aria-hidden', 'false');
-      main.classList.add('clients-view-open');
-    }, 220);
+      app.classList.add('clients-view-open');
+      app.classList.remove('clients-switching');
+    }, 180);
   });
 
   backButton.addEventListener('click', () => {
     clientsPanel.classList.remove('active');
     clientsPanel.setAttribute('aria-hidden', 'true');
-    main.classList.remove('clients-view-open');
-    window.setTimeout(() => {
-      hero.style.display = '';
-      hero.classList.remove('card-view-leave');
-      hero.classList.add('card-view-enter');
-      window.setTimeout(() => hero.classList.remove('card-view-enter'), 320);
-    }, 180);
+    app.classList.remove('clients-view-open');
+    app.classList.add('clients-returning');
+    window.setTimeout(() => app.classList.remove('clients-returning'), 300);
   });
 
   main.appendChild(openButton);
-  main.appendChild(clientsPanel);
+  app.appendChild(clientsPanel);
 };
 
 const observer = new MutationObserver(() => ensureClientsTab());
