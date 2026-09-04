@@ -68,6 +68,7 @@ const ensureClientsTab = () => {
     <div class="client-upload-grid">
       <label class="client-upload-card">
         <input type="file" accept="application/pdf,.pdf" data-client-file="doc" hidden>
+        <button type="button" class="client-file-clear" data-clear-file="doc" aria-label="Remover DOC COMPLETO">×</button>
         <span class="client-upload-icon">▤</span>
         <strong>DOC COMPLETO</strong>
         <small class="client-required">Obrigatório</small>
@@ -75,6 +76,7 @@ const ensureClientsTab = () => {
       </label>
       <label class="client-upload-card">
         <input type="file" accept="application/pdf,.pdf" data-client-file="nf" hidden>
+        <button type="button" class="client-file-clear" data-clear-file="nf" aria-label="Remover NF FISCAL">×</button>
         <span class="client-upload-icon">▤</span>
         <strong>NF FISCAL</strong>
         <small class="client-required">Obrigatório</small>
@@ -84,6 +86,7 @@ const ensureClientsTab = () => {
     <div class="client-mode-divider"><span>ou</span></div>
     <label class="client-upload-card client-upload-zip">
       <input type="file" accept=".zip,application/zip" data-client-file="zip" hidden>
+      <button type="button" class="client-file-clear" data-clear-file="zip" aria-label="Remover pacote ZIP">×</button>
       <span class="client-upload-icon">▣</span>
       <strong>PACOTE .ZIP</strong>
       <small>PDFs do processo dentro do ZIP</small>
@@ -124,6 +127,7 @@ const ensureClientsTab = () => {
       hideViews();
       detailView.classList.add('active');
       detailView.setAttribute('aria-hidden', 'false');
+      detailView.scrollTop=0;
     }, 150);
   };
 
@@ -163,11 +167,13 @@ const ensureClientsTab = () => {
     hideViews();
     reportView.classList.add('active');
     reportView.setAttribute('aria-hidden','false');
+    reportView.scrollTop=0;
 
     reportView.querySelector('.client-report-back')?.addEventListener('click',()=>{
       hideViews();
       detailView.classList.add('active');
       detailView.setAttribute('aria-hidden','false');
+      detailView.scrollTop=0;
     });
     reportView.querySelector('.client-report-new')?.addEventListener('click',async()=>{
       await resetValidatedBase();
@@ -175,6 +181,7 @@ const ensureClientsTab = () => {
       hideViews();
       detailView.classList.add('active');
       detailView.setAttribute('aria-hidden','false');
+      detailView.scrollTop=0;
     });
     reportView.querySelector('.client-report-copy')?.addEventListener('click',()=>{
       const text=[
@@ -225,12 +232,38 @@ const ensureClientsTab = () => {
     fileInputs.forEach(input => {
       const card = input.closest<HTMLElement>('.client-upload-card');
       if (!card) return;
-      card.classList.toggle('selected', Boolean(input.files?.[0]));
+      const selected=Boolean(input.files?.[0]);
+      card.classList.toggle('selected', selected);
       const em = card.querySelector('em');
       if (em) em.textContent = input.files?.[0]?.name || 'clique para selecionar';
+      const clear=card.querySelector<HTMLButtonElement>('.client-file-clear');
+      if(clear)clear.hidden=!selected;
     });
   }
-  fileInputs.forEach(input => input.addEventListener('change', refreshClientFiles));
+
+  fileInputs.forEach(input => input.addEventListener('change',()=>{
+    if(input.files?.[0]){
+      const kind=input.dataset.clientFile;
+      if(kind==='zip'){
+        fileInputs.filter(other=>other!==input&&other.dataset.clientFile!=='zip').forEach(other=>{other.value=''});
+      }else{
+        fileInputs.filter(other=>other.dataset.clientFile==='zip').forEach(other=>{other.value=''});
+      }
+    }
+    refreshClientFiles();
+  }));
+
+  detailView.querySelectorAll<HTMLButtonElement>('.client-file-clear').forEach(button=>{
+    button.hidden=true;
+    button.addEventListener('click',event=>{
+      event.preventDefault();
+      event.stopPropagation();
+      const kind=button.dataset.clearFile;
+      const input=detailView.querySelector<HTMLInputElement>(`[data-client-file="${kind}"]`);
+      if(input)input.value='';
+      refreshClientFiles();
+    });
+  });
 
   analyzeButton?.addEventListener('click', async()=>{
     const files=getFiles();
