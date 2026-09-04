@@ -1,66 +1,71 @@
 /* Matrix branca apenas nas laterais do fundo vermelho existente.
-   Mantém o centro livre para não passar atrás das informações do sistema. */
+   Mantém distância das bordas da página e do cartão principal. */
 body::before,
 body::after{
-  content:"01001101 01000001 01010100 01010010 01001001 01011000 00110101 01100011 01101111 01110011 01110100 01100001 01101100 01101111 01100111 11001010 01011010 10110100 01101001 01011010 00101101 01010110 01100001 01101100 01101001 01100100 01100001 01100011 01100001 01101111 10110101 00110101 11001010 01101001 01011010 10110100";
   position:fixed;
-  top:-135vh;
+  top:-115vh;
   bottom:auto;
-  width:max(84px,calc((100vw - 1240px)/2));
-  min-width:84px;
-  height:340vh;
+  width:max(64px,calc((100vw - 1240px)/2 - 44px));
+  min-width:64px;
+  height:300vh;
   z-index:0;
   pointer-events:none;
   overflow:hidden;
-  white-space:pre-wrap;
-  word-break:break-all;
+  white-space:pre;
   writing-mode:vertical-rl;
   font-family:Consolas,"Courier New",monospace;
-  font-size:14px;
-  line-height:1.1;
+  font-size:13px;
+  line-height:1.15;
   font-weight:700;
-  letter-spacing:4px;
-  color:rgba(255,255,255,.34);
-  filter:drop-shadow(0 0 6px rgba(255,255,255,.15));
-  animation:costalogMatrixRain 14s linear infinite;
+  letter-spacing:3px;
+  color:rgba(255,255,255,.32);
+  filter:drop-shadow(0 0 5px rgba(255,255,255,.14));
+  animation:costalogMatrixRain 15s linear infinite;
+  opacity:.9;
 }
 
 body::before{
-  left:0;
+  content:"01001101 101001\A00110110 010111\A11010010 001011\A01101001 101101\A10010110 010010\A00101101 111001";
+  left:22px;
   text-shadow:
-    28px 0 rgba(255,255,255,.18),
-    56px 0 rgba(255,255,255,.28),
-    84px 0 rgba(255,255,255,.16),
-    112px 0 rgba(255,255,255,.30),
-    140px 0 rgba(255,255,255,.20);
+    22px 0 rgba(255,255,255,.16),
+    48px 0 rgba(255,255,255,.25),
+    74px 0 rgba(255,255,255,.14),
+    101px 0 rgba(255,255,255,.22);
 }
 
 body::after{
-  right:0;
+  content:"10110100 011010\A01001011 110101\A11100010 001101\A00110101 100110\A01010110 011001\A11001010 101011";
+  right:22px;
   left:auto;
   text-shadow:
-    -28px 0 rgba(255,255,255,.18),
-    -56px 0 rgba(255,255,255,.28),
-    -84px 0 rgba(255,255,255,.16),
-    -112px 0 rgba(255,255,255,.30),
-    -140px 0 rgba(255,255,255,.20);
-  animation-duration:17s;
-  animation-delay:-6s;
+    -22px 0 rgba(255,255,255,.15),
+    -49px 0 rgba(255,255,255,.24),
+    -76px 0 rgba(255,255,255,.14),
+    -103px 0 rgba(255,255,255,.23);
+  animation-duration:18s;
+  animation-delay:-7s;
 }
 
 @keyframes costalogMatrixRain{
-  0%{transform:translateY(-10vh);opacity:0}
-  8%{opacity:.95}
-  84%{opacity:.72}
-  100%{transform:translateY(225vh);opacity:0}
+  0%{transform:translateY(-8vh);opacity:0}
+  8%{opacity:.92}
+  82%{opacity:.68}
+  100%{transform:translateY(210vh);opacity:0}
 }
 
-/* Em telas onde o cartão ocupa quase toda a largura, reduz a faixa lateral
-   para a animação não disputar espaço com o conteúdo. */
+/* Em telas menores, mantém uma margem de segurança entre a Matrix,
+   a parede do navegador e o cartão principal. */
 @media(max-width:1320px){
-  body::before,body::after{width:28px;min-width:28px;font-size:11px;letter-spacing:3px;color:rgba(255,255,255,.26)}
-  body::before{text-shadow:none}
-  body::after{text-shadow:none}
+  body::before,body::after{
+    width:38px;
+    min-width:38px;
+    font-size:10px;
+    letter-spacing:2px;
+    color:rgba(255,255,255,.24);
+  }
+  body::before{left:12px;text-shadow:18px 0 rgba(255,255,255,.14)}
+  body::after{right:12px;text-shadow:-18px 0 rgba(255,255,255,.14)}
 }
 
 @media(max-width:780px){
@@ -68,5 +73,5 @@ body::after{
 }
 
 @media(prefers-reduced-motion:reduce){
-  body::before,body::after{animation:none!important;opacity:.18}
+  body::before,body::after{animation:none!important;opacity:.16}
 }
