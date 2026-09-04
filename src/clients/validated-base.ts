@@ -1,4 +1,6 @@
 export type ClientProcessFiles={doc:File|null;nf:File|null;zip:File|null};
+export type ClientAnalysisField={label:string;value:string;confidence:string;source:string};
+export type ClientAnalysisSnapshot={processType:string;summary:string;found:number;total:number;fields:ClientAnalysisField[]};
 
 export const VALIDATED_ANALYSIS_BASE=Object.freeze({
   id:'validated-base-v1',
@@ -17,19 +19,52 @@ function assignFile(input:HTMLInputElement,file:File){
   input.dispatchEvent(new Event('change',{bubbles:true}));
 }
 
-async function waitForAnalyzeButton(timeout=1200){
+const sleep=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
+
+async function waitFor<T extends Element>(selector:string,timeout=120000):Promise<T|null>{
   const start=performance.now();
   while(performance.now()-start<timeout){
-    const button=document.querySelector<HTMLButtonElement>('.app > main .primary');
-    if(button)return button;
-    await new Promise(r=>setTimeout(r,30));
+    const el=document.querySelector<T>(selector);
+    if(el)return el;
+    const error=document.querySelector<HTMLElement>('.app > main .error');
+    if(error?.textContent?.trim())throw new Error(error.textContent.trim());
+    await sleep(60);
   }
   return null;
 }
 
-export async function runValidatedBase(files:ClientProcessFiles){
+async function resetMainAnalyzer(){
+  const results=document.querySelector<HTMLElement>('.app > main .results');
+  if(!results)return;
+  const buttons=[...results.querySelectorAll<HTMLButtonElement>('button')];
+  const reset=buttons.find(button=>/Nova análise/i.test(button.textContent||''));
+  reset?.click();
+  await waitFor<HTMLElement>('.app > main .hero',2500);
+}
+
+function scrapeAnalysis():ClientAnalysisSnapshot{
+  const results=document.querySelector<HTMLElement>('.app > main .results');
+  if(!results)throw new Error('O relatório foi processado, mas não foi possível lê-lo na interface.');
+  const fields=[...results.querySelectorAll<HTMLElement>('.row')].map(row=>{
+    const parts=row.children;
+    const label=(parts[0]?.querySelector('b')?.textContent||'Campo').trim();
+    const input=parts[1]?.querySelector<HTMLInputElement>('input');
+    const value=(input?.value||parts[1]?.textContent||'Não localizado').trim();
+    const confidence=(parts[2]?.textContent||'').replace(/\s+/g,' ').trim();
+    const source=(parts[3]?.textContent||'').replace(/\s+/g,' ').trim();
+    return{label,value,confidence,source};
+  });
+  const processType=(results.querySelector<HTMLElement>('.metric .type')?.textContent||'NÃO IDENTIFICADO').trim();
+  const summary=(results.querySelector<HTMLElement>('.result-head p')?.textContent||'').replace(/\s+/g,' ').trim();
+  const found=fields.filter(field=>field.value&&!/Não localizado/i.test(field.value)).length;
+  return{processType,summary,found,total:fields.length,fields};
+}
+
+export async function runValidatedBase(files:ClientProcessFiles):Promise<ClientAnalysisSnapshot>{
   const {doc,nf,zip}=files;
   if(!zip&&(!doc||!nf))throw new Error('Para este cliente, DOC COMPLETO e NF FISCAL são obrigatórios quando o modo individual for utilizado.');
+
+  await resetMainAnalyzer();
 
   const inputs=[...document.querySelectorAll<HTMLInputElement>('.app > main input[type="file"]')];
   const pdfInputs=inputs.filter(i=>/application\/pdf/i.test(i.accept));
@@ -42,11 +77,19 @@ export async function runValidatedBase(files:ClientProcessFiles){
     assignFile(zipInput,zip);
   }else{
     assignFile(docInput,doc!);
-    await new Promise(r=>setTimeout(r,0));
+    await sleep(0);
     assignFile(nfInput,nf!);
   }
 
-  const analyzeButton=await waitForAnalyzeButton();
+  const analyzeButton=await waitFor<HTMLButtonElement>('.app > main .primary',2500);
   if(!analyzeButton)throw new Error('Botão de análise não localizado.');
   analyzeButton.click();
+
+  const results=await waitFor<HTMLElement>('.app > main .results',120000);
+  if(!results)throw new Error('A análise demorou mais do que o esperado para gerar o relatório.');
+  return scrapeAnalysis();
+}
+
+export async function resetValidatedBase(){
+  await resetMainAnalyzer();
 }
