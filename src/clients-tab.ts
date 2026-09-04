@@ -1,5 +1,9 @@
 import { GLOVIS_PROFILE } from './clients/glovis';
-import { runValidatedBase } from './clients/validated-base';
+import { resetValidatedBase, runValidatedBase, type ClientAnalysisSnapshot } from './clients/validated-base';
+
+const escapeHtml=(value:string)=>value.replace(/[&<>'"]/g,char=>({
+  '&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'
+}[char]||char));
 
 const ensureClientsTab = () => {
   const app = document.querySelector<HTMLElement>('.app');
@@ -89,28 +93,102 @@ const ensureClientsTab = () => {
     <button type="button" class="client-analyze-button" disabled>Analisar processo GLOVIS</button>
   `;
 
+  const reportView=document.createElement('div');
+  reportView.className='client-report-view';
+  reportView.setAttribute('aria-hidden','true');
+
   clientsContent.appendChild(listView);
   clientsContent.appendChild(detailView);
+  clientsContent.appendChild(reportView);
   clientsPanel.appendChild(clientsBrand);
   clientsPanel.appendChild(clientsContent);
 
-  const showClientList = () => {
+  const hideViews=()=>{
+    listView.classList.remove('active','leaving');
     detailView.classList.remove('active');
-    detailView.setAttribute('aria-hidden', 'true');
-    listView.classList.remove('leaving');
+    reportView.classList.remove('active');
+    listView.setAttribute('aria-hidden','true');
+    detailView.setAttribute('aria-hidden','true');
+    reportView.setAttribute('aria-hidden','true');
+  };
+
+  const showClientList = () => {
+    hideViews();
     listView.classList.add('active');
+    listView.setAttribute('aria-hidden','false');
   };
 
   const showClientDetail = () => {
     listView.classList.add('leaving');
     window.setTimeout(() => {
-      listView.classList.remove('active');
+      hideViews();
       detailView.classList.add('active');
       detailView.setAttribute('aria-hidden', 'false');
     }, 150);
   };
 
-  const closeClientsPanel = () => {
+  const clearClientFiles=()=>{
+    detailView.querySelectorAll<HTMLInputElement>('input[type="file"]').forEach(input=>{input.value=''});
+    refreshClientFiles();
+  };
+
+  const showReport=(analysis:ClientAnalysisSnapshot)=>{
+    const fields=analysis.fields.map(field=>`
+      <div class="client-report-row">
+        <div class="client-report-field"><b>${escapeHtml(field.label)}</b><span>${escapeHtml(field.source)}</span></div>
+        <div class="client-report-value">${escapeHtml(field.value)}</div>
+        <div class="client-report-confidence">${escapeHtml(field.confidence)}</div>
+      </div>`).join('');
+    reportView.innerHTML=`
+      <div class="client-report-toolbar">
+        <button type="button" class="client-report-back">← GLOVIS</button>
+        <button type="button" class="client-report-copy">Copiar relatório</button>
+      </div>
+      <div class="client-report-head">
+        <span class="client-report-logo"><img src="${GLOVIS_PROFILE.logo}" alt="Logo ${GLOVIS_PROFILE.displayName}"></span>
+        <div>
+          <span class="clients-kicker">Relatório por cliente</span>
+          <h2>Relatório ${GLOVIS_PROFILE.name}</h2>
+          <p><b>Cliente do relatório: ${GLOVIS_PROFILE.name}</b> · ${escapeHtml(analysis.summary||'Análise concluída')}</p>
+        </div>
+      </div>
+      <div class="client-report-metrics">
+        <div><span>Cliente</span><b>${GLOVIS_PROFILE.name}</b></div>
+        <div><span>Operação</span><b>${escapeHtml(analysis.processType)}</b></div>
+        <div><span>Campos</span><b>${analysis.found}/${analysis.total}</b></div>
+      </div>
+      <div class="client-report-table">${fields}</div>
+      <button type="button" class="client-report-new">Nova análise ${GLOVIS_PROFILE.name}</button>
+    `;
+    hideViews();
+    reportView.classList.add('active');
+    reportView.setAttribute('aria-hidden','false');
+
+    reportView.querySelector('.client-report-back')?.addEventListener('click',()=>{
+      hideViews();
+      detailView.classList.add('active');
+      detailView.setAttribute('aria-hidden','false');
+    });
+    reportView.querySelector('.client-report-new')?.addEventListener('click',async()=>{
+      await resetValidatedBase();
+      clearClientFiles();
+      hideViews();
+      detailView.classList.add('active');
+      detailView.setAttribute('aria-hidden','false');
+    });
+    reportView.querySelector('.client-report-copy')?.addEventListener('click',()=>{
+      const text=[
+        `Cliente do relatório: ${GLOVIS_PROFILE.name}`,
+        `Operação: ${analysis.processType}`,
+        '',
+        ...analysis.fields.map(field=>`${field.label}: ${field.value}`)
+      ].join('\n');
+      void navigator.clipboard?.writeText(text);
+    });
+  };
+
+  const closeClientsPanel = async() => {
+    await resetValidatedBase();
     showClientList();
     app.classList.add('clients-returning');
     app.classList.remove('clients-view-open');
@@ -122,6 +200,7 @@ const ensureClientsTab = () => {
   };
 
   listView.classList.add('active');
+  listView.setAttribute('aria-hidden','false');
   listView.querySelector('.client-card-glovis')?.addEventListener('click', showClientDetail);
   detailView.querySelector('.client-detail-back')?.addEventListener('click', showClientList);
 
@@ -133,7 +212,7 @@ const ensureClientsTab = () => {
     zip: detailView.querySelector<HTMLInputElement>('[data-client-file="zip"]')?.files?.[0] ?? null
   });
 
-  const refreshClientFiles = () => {
+  function refreshClientFiles(){
     const {doc,nf,zip}=getFiles();
     const status = detailView.querySelector<HTMLElement>('.client-mode-status');
     if (!status) return;
@@ -150,7 +229,7 @@ const ensureClientsTab = () => {
       const em = card.querySelector('em');
       if (em) em.textContent = input.files?.[0]?.name || 'clique para selecionar';
     });
-  };
+  }
   fileInputs.forEach(input => input.addEventListener('change', refreshClientFiles));
 
   analyzeButton?.addEventListener('click', async()=>{
@@ -158,15 +237,16 @@ const ensureClientsTab = () => {
     const status=detailView.querySelector<HTMLElement>('.client-mode-status');
     try{
       analyzeButton.disabled=true;
-      analyzeButton.textContent='Preparando análise...';
-      await runValidatedBase(files);
-      if(status)status.textContent='Arquivos enviados para a base validada do GLOVIS.';
-      closeClientsPanel();
+      analyzeButton.textContent='Analisando processo GLOVIS...';
+      if(status)status.textContent='Lendo e cruzando os documentos da GLOVIS...';
+      const analysis=await runValidatedBase(files);
+      showReport(analysis);
     }catch(error){
       if(status)status.textContent=error instanceof Error?error.message:'Não foi possível iniciar a análise.';
       refreshClientFiles();
     }finally{
       analyzeButton.textContent='Analisar processo GLOVIS';
+      refreshClientFiles();
     }
   });
 
@@ -184,7 +264,7 @@ const ensureClientsTab = () => {
 
   backButton.addEventListener('click', () => {
     if (!app.classList.contains('clients-view-open')) return;
-    closeClientsPanel();
+    void closeClientsPanel();
   });
 
   main.appendChild(openButton);
