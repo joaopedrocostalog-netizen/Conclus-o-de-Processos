@@ -5,8 +5,9 @@ import './styles.css';
 import './matrix-overlay.css';
 import './clients-tab.css';
 import './home-cleanup.css';
-import './client-detail-no-scroll.css';
+import './report-sources.css';
 import './clients-tab';
+import './report-sources';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode><App /></React.StrictMode>
