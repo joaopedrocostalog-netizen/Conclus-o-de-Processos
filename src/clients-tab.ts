@@ -1,3 +1,6 @@
+import { GLOVIS_PROFILE } from './clients/glovis';
+import { runValidatedBase } from './clients/validated-base';
+
 const ensureClientsTab = () => {
   const app = document.querySelector<HTMLElement>('.app');
   const main = app?.querySelector<HTMLElement>('main');
@@ -36,10 +39,10 @@ const ensureClientsTab = () => {
       <p>Cada cliente terá regras próprias de leitura e conferência dos documentos.</p>
     </div>
     <div class="clients-grid">
-      <button type="button" class="client-card client-card-template" aria-label="Abrir cliente modelo">
-        <span class="client-logo-placeholder">+</span>
-        <strong>Cliente</strong>
-        <small>Aguardando nome e logo</small>
+      <button type="button" class="client-card client-card-glovis" aria-label="Abrir cliente ${GLOVIS_PROFILE.name}">
+        <span class="client-logo-image"><img src="${GLOVIS_PROFILE.logo}" alt="Logo ${GLOVIS_PROFILE.displayName}"></span>
+        <strong>${GLOVIS_PROFILE.name}</strong>
+        <small>Base de leitura validada</small>
       </button>
     </div>
   `;
@@ -50,11 +53,11 @@ const ensureClientsTab = () => {
   detailView.innerHTML = `
     <button type="button" class="client-detail-back">← Clientes</button>
     <div class="client-detail-head">
-      <span class="client-detail-logo">+</span>
+      <span class="client-detail-logo client-detail-logo-image"><img src="${GLOVIS_PROFILE.logo}" alt="Logo ${GLOVIS_PROFILE.displayName}"></span>
       <div>
         <span class="clients-kicker">Processo por cliente</span>
-        <h2>Cliente</h2>
-        <p>Os padrões de extração serão configurados individualmente para este cliente.</p>
+        <h2>${GLOVIS_PROFILE.name}</h2>
+        <p>Este cliente utiliza a mesma base de extração e conferência já validada no sistema principal.</p>
       </div>
     </div>
     <div class="client-required-note"><b>DOC COMPLETO + NF FISCAL</b><span>Os dois PDFs são obrigatórios quando esse modo for utilizado.</span></div>
@@ -83,6 +86,7 @@ const ensureClientsTab = () => {
       <em>clique para selecionar</em>
     </label>
     <div class="client-mode-status" aria-live="polite">Selecione DOC COMPLETO + NF FISCAL, ou utilize um pacote .ZIP.</div>
+    <button type="button" class="client-analyze-button" disabled>Analisar processo GLOVIS</button>
   `;
 
   clientsContent.appendChild(listView);
@@ -106,15 +110,31 @@ const ensureClientsTab = () => {
     }, 150);
   };
 
+  const closeClientsPanel = () => {
+    showClientList();
+    app.classList.add('clients-returning');
+    app.classList.remove('clients-view-open');
+    clientsPanel.classList.remove('active');
+    window.setTimeout(() => {
+      clientsPanel.setAttribute('aria-hidden', 'true');
+      app.classList.remove('clients-returning');
+    }, 380);
+  };
+
   listView.classList.add('active');
-  listView.querySelector('.client-card')?.addEventListener('click', showClientDetail);
+  listView.querySelector('.client-card-glovis')?.addEventListener('click', showClientDetail);
   detailView.querySelector('.client-detail-back')?.addEventListener('click', showClientList);
 
   const fileInputs = [...detailView.querySelectorAll<HTMLInputElement>('input[type="file"]')];
+  const analyzeButton = detailView.querySelector<HTMLButtonElement>('.client-analyze-button');
+  const getFiles = () => ({
+    doc: detailView.querySelector<HTMLInputElement>('[data-client-file="doc"]')?.files?.[0] ?? null,
+    nf: detailView.querySelector<HTMLInputElement>('[data-client-file="nf"]')?.files?.[0] ?? null,
+    zip: detailView.querySelector<HTMLInputElement>('[data-client-file="zip"]')?.files?.[0] ?? null
+  });
+
   const refreshClientFiles = () => {
-    const doc = detailView.querySelector<HTMLInputElement>('[data-client-file="doc"]')?.files?.[0] ?? null;
-    const nf = detailView.querySelector<HTMLInputElement>('[data-client-file="nf"]')?.files?.[0] ?? null;
-    const zip = detailView.querySelector<HTMLInputElement>('[data-client-file="zip"]')?.files?.[0] ?? null;
+    const {doc,nf,zip}=getFiles();
     const status = detailView.querySelector<HTMLElement>('.client-mode-status');
     if (!status) return;
     if (zip) status.textContent = `ZIP selecionado: ${zip.name}`;
@@ -122,6 +142,7 @@ const ensureClientsTab = () => {
     else if (doc || nf) status.textContent = 'Falta selecionar o segundo PDF obrigatório: DOC COMPLETO + NF FISCAL precisam estar juntos.';
     else status.textContent = 'Selecione DOC COMPLETO + NF FISCAL, ou utilize um pacote .ZIP.';
 
+    if(analyzeButton)analyzeButton.disabled=!(zip||(doc&&nf));
     fileInputs.forEach(input => {
       const card = input.closest<HTMLElement>('.client-upload-card');
       if (!card) return;
@@ -131,6 +152,23 @@ const ensureClientsTab = () => {
     });
   };
   fileInputs.forEach(input => input.addEventListener('change', refreshClientFiles));
+
+  analyzeButton?.addEventListener('click', async()=>{
+    const files=getFiles();
+    const status=detailView.querySelector<HTMLElement>('.client-mode-status');
+    try{
+      analyzeButton.disabled=true;
+      analyzeButton.textContent='Preparando análise...';
+      await runValidatedBase(files);
+      if(status)status.textContent='Arquivos enviados para a base validada do GLOVIS.';
+      closeClientsPanel();
+    }catch(error){
+      if(status)status.textContent=error instanceof Error?error.message:'Não foi possível iniciar a análise.';
+      refreshClientFiles();
+    }finally{
+      analyzeButton.textContent='Analisar processo GLOVIS';
+    }
+  });
 
   openButton.addEventListener('click', () => {
     if (app.classList.contains('clients-view-open')) return;
@@ -146,14 +184,7 @@ const ensureClientsTab = () => {
 
   backButton.addEventListener('click', () => {
     if (!app.classList.contains('clients-view-open')) return;
-    showClientList();
-    app.classList.add('clients-returning');
-    app.classList.remove('clients-view-open');
-    clientsPanel.classList.remove('active');
-    window.setTimeout(() => {
-      clientsPanel.setAttribute('aria-hidden', 'true');
-      app.classList.remove('clients-returning');
-    }, 380);
+    closeClientsPanel();
   });
 
   main.appendChild(openButton);
