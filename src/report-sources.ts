@@ -55,7 +55,7 @@ async function buildPdfPreview(row:HTMLElement,sourceText:string,container:HTMLE
     canvas.height=Math.ceil(viewport.height);
     const ctx=canvas.getContext('2d');
     if(!ctx)throw new Error('Não foi possível criar a prévia.');
-    await page.render({canvasContext:ctx,viewport}).promise;
+    await page.render({canvas,canvasContext:ctx,viewport}).promise;
 
     const value=row.querySelector<HTMLElement>('.client-report-value')?.textContent?.trim()||'';
     const needle=norm(value).slice(0,48);
