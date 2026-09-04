@@ -1,0 +1,7 @@
+/* Mantém a tela de seleção de processos do cliente sem barra de rolagem interna no desktop. */
+@media (min-width: 781px){
+  .client-detail-view{
+    overflow-y:hidden!important;
+    scrollbar-gutter:auto!important;
+  }
+}
