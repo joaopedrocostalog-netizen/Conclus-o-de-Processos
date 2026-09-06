@@ -7,10 +7,8 @@ import './clients-tab.css';
 import './home-cleanup.css';
 import './report-sources.css';
 import './client-detail-no-scroll.css';
-import './client-workflow-enhancements.css';
 import './clients-tab';
 import './report-preview-loader';
-import './client-workflow-enhancements';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode><App /></React.StrictMode>
