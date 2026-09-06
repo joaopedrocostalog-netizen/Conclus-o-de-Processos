@@ -8,9 +8,7 @@ import './home-cleanup.css';
 import './report-sources.css';
 import './client-detail-no-scroll.css';
 import './clients-tab';
-import './report-sources';
-import './report-sources-manual-fix';
-import './report-weight-preview-fix';
+import './report-preview-loader';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode><App /></React.StrictMode>
