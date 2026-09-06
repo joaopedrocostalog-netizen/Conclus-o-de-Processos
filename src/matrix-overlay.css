@@ -21,6 +21,9 @@ body::after{
   color:rgba(255,255,255,.27);
   filter:drop-shadow(0 0 4px rgba(255,255,255,.12));
   opacity:.88;
+  will-change:transform,opacity;
+  contain:paint;
+  backface-visibility:hidden;
 }
 
 body::before{
@@ -50,21 +53,21 @@ body::after{
 }
 
 @keyframes matrixLeftA{
-  0%{transform:translate(0,-12vh);opacity:0}
+  0%{transform:translate3d(0,-12vh,0);opacity:0}
   10%{opacity:.9}
-  28%{transform:translate(7px,38vh)}
-  52%{transform:translate(-5px,94vh)}
-  74%{transform:translate(10px,148vh)}
-  100%{transform:translate(1px,215vh);opacity:0}
+  28%{transform:translate3d(7px,38vh,0)}
+  52%{transform:translate3d(-5px,94vh,0)}
+  74%{transform:translate3d(10px,148vh,0)}
+  100%{transform:translate3d(1px,215vh,0);opacity:0}
 }
 
 @keyframes matrixRightA{
-  0%{transform:translate(0,-18vh);opacity:0}
+  0%{transform:translate3d(0,-18vh,0);opacity:0}
   9%{opacity:.88}
-  24%{transform:translate(-8px,31vh)}
-  49%{transform:translate(5px,88vh)}
-  71%{transform:translate(-10px,143vh)}
-  100%{transform:translate(-2px,222vh);opacity:0}
+  24%{transform:translate3d(-8px,31vh,0)}
+  49%{transform:translate3d(5px,88vh,0)}
+  71%{transform:translate3d(-10px,143vh,0)}
+  100%{transform:translate3d(-2px,222vh,0);opacity:0}
 }
 
 /* Em telas menores, reduz ainda mais o texto e mantém a animação distante
@@ -92,5 +95,5 @@ body::after{
 }
 
 @media(prefers-reduced-motion:reduce){
-  body::before,body::after{animation:none!important;opacity:.14}
+  body::before,body::after{animation:none!important;opacity:.14;will-change:auto}
 }
