@@ -7,48 +7,55 @@ const isDivergence=(row:HTMLElement)=>{
   return /não localizado|baixa|média|revis|diverg/i.test(`${value} ${confidence} ${source}`);
 };
 
-function enhanceReport(report:HTMLElement){
-  const rows=[...report.querySelectorAll<HTMLElement>('.client-report-row')];
-  if(!rows.length)return;
-
-  let controls=report.querySelector<HTMLElement>('.client-divergence-controls');
-  if(!controls){
-    controls=document.createElement('div');
-    controls.className='client-divergence-controls';
-    controls.innerHTML='<button type="button" class="client-divergence-toggle" aria-pressed="false">Somente divergências</button><span class="client-divergence-count"></span>';
-    const metrics=report.querySelector('.client-report-metrics');
-    if(metrics)metrics.insertAdjacentElement('afterend',controls);
-    else report.prepend(controls);
-
-    const button=controls.querySelector<HTMLButtonElement>('.client-divergence-toggle')!;
-    button.addEventListener('click',()=>{
-      const active=button.getAttribute('aria-pressed')!=='true';
-      button.setAttribute('aria-pressed',String(active));
-      button.classList.toggle('active',active);
-      button.textContent=active?'Mostrar todos':'Somente divergências';
-      report.classList.toggle('show-only-divergences',active);
-      [...report.querySelectorAll<HTMLElement>('.client-report-row')].forEach(row=>{
-        row.hidden=active&&!isDivergence(row);
-      });
-      updateCount(report);
-    });
-  }
-  updateCount(report);
-}
-
 function updateCount(report:HTMLElement){
   const rows=[...report.querySelectorAll<HTMLElement>('.client-report-row')];
   const divergences=rows.filter(isDivergence).length;
   const count=report.querySelector<HTMLElement>('.client-divergence-count');
-  if(count)count.textContent=divergences?`${divergences} campo${divergences===1?'':'s'} para revisar`:'Nenhuma divergência encontrada';
+  if(!count)return;
+  const next=divergences?`${divergences} campo${divergences===1?'':'s'} para revisar`:'Nenhuma divergência encontrada';
+  if(count.textContent!==next)count.textContent=next;
+}
+
+function enhanceReport(report:HTMLElement){
+  const rows=[...report.querySelectorAll<HTMLElement>('.client-report-row')];
+  if(!rows.length||report.querySelector('.client-divergence-controls'))return;
+
+  const controls=document.createElement('div');
+  controls.className='client-divergence-controls';
+  controls.innerHTML='<button type="button" class="client-divergence-toggle" aria-pressed="false">Somente divergências</button><span class="client-divergence-count"></span>';
+  const metrics=report.querySelector('.client-report-metrics');
+  if(metrics)metrics.insertAdjacentElement('afterend',controls);
+  else report.prepend(controls);
+
+  const button=controls.querySelector<HTMLButtonElement>('.client-divergence-toggle')!;
+  button.addEventListener('click',()=>{
+    const active=button.getAttribute('aria-pressed')!=='true';
+    button.setAttribute('aria-pressed',String(active));
+    button.classList.toggle('active',active);
+    button.textContent=active?'Mostrar todos':'Somente divergências';
+    report.classList.toggle('show-only-divergences',active);
+    [...report.querySelectorAll<HTMLElement>('.client-report-row')].forEach(row=>{
+      row.hidden=active&&!isDivergence(row);
+    });
+    updateCount(report);
+  });
+
+  updateCount(report);
 }
 
 function bindReport(report:HTMLElement){
   if(report.dataset.divergenceBound==='true')return;
   report.dataset.divergenceBound='true';
   enhanceReport(report);
-  const reportObserver=new MutationObserver(()=>enhanceReport(report));
-  reportObserver.observe(report,{childList:true,subtree:true});
+
+  // Observa somente a criação/substituição do conteúdo do relatório.
+  // Não recalcula a cada alteração interna para evitar loops de MutationObserver.
+  const reportObserver=new MutationObserver(()=>{
+    if(report.querySelector('.client-report-row')&&!report.querySelector('.client-divergence-controls')){
+      enhanceReport(report);
+    }
+  });
+  reportObserver.observe(report,{childList:true});
 }
 
 function findAndBind(){
