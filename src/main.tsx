@@ -12,6 +12,7 @@ import './client-field-copy.css';
 import './client-review-mode.css';
 import './client-divergence-filter.css';
 import './client-report-search.css';
+import './client-session-history.css';
 import './clients-tab';
 import './report-preview-loader';
 import './client-analysis-progress';
@@ -19,6 +20,7 @@ import './client-field-copy';
 import './client-review-mode';
 import './client-divergence-filter';
 import './client-report-search';
+import './client-session-history';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode><App /></React.StrictMode>
