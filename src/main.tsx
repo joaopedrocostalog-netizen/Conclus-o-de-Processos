@@ -10,6 +10,7 @@ import './client-detail-no-scroll.css';
 import './clients-tab';
 import './report-sources';
 import './report-sources-manual-fix';
+import './report-weight-preview-fix';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode><App /></React.StrictMode>
