@@ -76,7 +76,7 @@ async function waitFor<T extends Element>(selector:string,timeout=120000):Promis
       if(error?.textContent?.trim())finish(null,new Error(error.textContent.trim()));
     };
     const observer=new MutationObserver(inspect);
-    observer.observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['class']});
+    observer.observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['class','disabled']});
     const timer=window.setTimeout(()=>finish(null),timeout);
     inspect();
   });
@@ -220,8 +220,12 @@ async function executeValidatedBase(files:ClientProcessFiles):Promise<ClientAnal
     assignFile(nfInput,nf!);
   }
 
-  const analyzeButton=await waitFor<HTMLButtonElement>('.app > main .primary',2500);
-  if(!analyzeButton)throw new Error('Botão de análise não localizado.');
+  // Aguarda o React terminar de registrar os arquivos no analisador oculto.
+  // Antes, o botão .primary podia ser encontrado ainda desabilitado; o click era ignorado
+  // e a ponte ficava aguardando o relatório até estourar o timeout de 120 segundos.
+  await sleep(20);
+  const analyzeButton=await waitFor<HTMLButtonElement>('.app > main .primary:not(:disabled)',5000);
+  if(!analyzeButton)throw new Error('Os documentos foram carregados, mas o analisador não ficou pronto para iniciar. Tente selecionar os arquivos novamente.');
   analyzeButton.click();
 
   const results=await waitFor<HTMLElement>('.app > main .results',120000);
