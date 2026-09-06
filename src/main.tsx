@@ -9,10 +9,12 @@ import './report-sources.css';
 import './client-detail-no-scroll.css';
 import './client-analysis-progress.css';
 import './client-field-copy.css';
+import './client-review-mode.css';
 import './clients-tab';
 import './report-preview-loader';
 import './client-analysis-progress';
 import './client-field-copy';
+import './client-review-mode';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode><App /></React.StrictMode>
