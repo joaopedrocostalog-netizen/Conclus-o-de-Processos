@@ -1,3 +1,5 @@
+export {};
+
 type HistoryEntry={id:string;client:string;operation:string;found:string;createdAt:number;fields:Array<{label:string;value:string}>};
 
 const HISTORY_KEY='costalog-client-report-history-v1';
@@ -60,11 +62,11 @@ function enhanceProcessing(){
     const text=progress.querySelector<HTMLElement>('.client-analysis-progress-text');
     if(text)text.textContent='Processando documentos com a base validada...';
   });
-  const observer=new MutationObserver(()=>{
+  const progressObserver=new MutationObserver(()=>{
     const report=document.querySelector<HTMLElement>('.client-report-view.active');
     if(report){progress.classList.remove('running');progress.hidden=true;}
   });
-  observer.observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['class']});
+  progressObserver.observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['class']});
 }
 
 function renderHistoryPanel(report:HTMLElement){
@@ -141,6 +143,6 @@ function run(){
   enhanceProcessing();
   document.querySelectorAll<HTMLElement>('.client-report-view.active').forEach(enhanceReport);
 }
-const observer=new MutationObserver(run);
-observer.observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['class']});
+const workflowObserver=new MutationObserver(run);
+workflowObserver.observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['class']});
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',run);else run();
