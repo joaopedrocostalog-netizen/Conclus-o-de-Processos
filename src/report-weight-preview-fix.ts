@@ -139,7 +139,7 @@ async function buildWeightPreview(row:HTMLElement){
   try{
     const doc=document.querySelector<HTMLInputElement>('[data-client-file="doc"]')?.files?.[0]||null;
     const nf=document.querySelector<HTMLInputElement>('[data-client-file="nf"]')?.files?.[0]||null;
-    const found:Array<{file:File;kind:'DOC COMPLETO'|'NF FISCAL';page:number;bytes:ArrayBuffer}>=[];
+    const found:Array<{file:File;kind:'DOC COMPLETO'|'NF FISCAL';page:number;bytes:ArrayBuffer}> = [];
     if(doc){const hit=await findWeightPage(doc,'DOC COMPLETO');if(hit)found.push({file:doc,kind:'DOC COMPLETO',page:hit.page,bytes:hit.bytes})}
     if(nf){const hit=await findWeightPage(nf,'NF FISCAL');if(hit)found.push({file:nf,kind:'NF FISCAL',page:hit.page,bytes:hit.bytes})}
     if(!found.length)return;
@@ -160,8 +160,9 @@ document.addEventListener('click',event=>{
   const target=event.target as Element|null;
   const toggle=target?.closest?.('.client-report-source-toggle');if(!toggle)return;
   const row=toggle.closest<HTMLElement>('.client-report-row');if(!row||!rowIsWeight(row))return;
-  const expanded=toggle.getAttribute('aria-expanded');
-  setTimeout(()=>{if(expanded!=='true')void waitAndFix(row)},120);
+  setTimeout(()=>{
+    if(toggle.getAttribute('aria-expanded')==='true')void waitAndFix(row);
+  },160);
 });
 
 const observer=new MutationObserver(()=>{
