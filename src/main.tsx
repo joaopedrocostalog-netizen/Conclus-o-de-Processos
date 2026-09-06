@@ -9,6 +9,7 @@ import './report-sources.css';
 import './client-detail-no-scroll.css';
 import './clients-tab';
 import './report-sources';
+import './report-sources-manual-fix';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode><App /></React.StrictMode>
