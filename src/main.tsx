@@ -13,6 +13,7 @@ import './client-review-mode.css';
 import './client-divergence-filter.css';
 import './client-report-search.css';
 import './client-session-history.css';
+import './client-capabilities.css';
 import './clients-tab';
 import './report-preview-loader';
 import './client-analysis-progress';
@@ -21,6 +22,7 @@ import './client-review-mode';
 import './client-divergence-filter';
 import './client-report-search';
 import './client-session-history';
+import './client-capabilities';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode><App /></React.StrictMode>
