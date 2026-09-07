@@ -6,8 +6,8 @@ function addCapabilities(){
 
   const capabilities=document.createElement('span');
   capabilities.className='client-capabilities';
-  capabilities.setAttribute('aria-label','Formatos aceitos e quantidade de campos');
-  capabilities.innerHTML='<span>DOC + NF</span><span>ZIP</span><span>13 campos</span>';
+  capabilities.setAttribute('aria-label','Formatos aceitos');
+  capabilities.innerHTML='<span>DOC + NF</span><span>ZIP</span>';
   card.appendChild(capabilities);
   return true;
 }
