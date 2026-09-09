@@ -16,6 +16,7 @@ export type IguasportAnalysisSnapshot={client:'IGUASPORT';processType:string;sum
 export const IGUASPORT_ANALYSIS_BASE=Object.freeze({id:'iguasport-v1',client:'IGUASPORT',isolated:true,reportFields:IGUASPORT_REPORT_FIELDS});
 
 type Kind='DUIMP'|'NF-e'|'BL'|'DARE'|'PDF';
+type DocumentKind=Exclude<Kind,'PDF'>;
 type Page={page:number;text:string;filename:string;kind:Kind};
 type Pick={value:string|null;source:string;confidence:'Alta'|'Média'|'Baixa'};
 
@@ -73,8 +74,8 @@ function cliente(pages:Page[]):Pick{
   return empty();
 }
 function tipoDocumento(pages:Page[]):Pick{
-  const kinds=[...new Set(pages.map(p=>p.kind).filter(k=>k!=='PDF'))];if(!kinds.length)return empty();
-  const order:Kind[]=['DUIMP','DARE','BL','NF-e'];const value=order.filter(k=>kinds.includes(k)).join(' + ');const p=pages.find(x=>x.kind!== 'PDF')!;
+  const kinds:DocumentKind[]=[...new Set(pages.map(p=>p.kind).filter((k):k is DocumentKind=>k!=='PDF'))];if(!kinds.length)return empty();
+  const order:DocumentKind[]=['DUIMP','DARE','BL','NF-e'];const value=order.filter(k=>kinds.includes(k)).join(' + ');const p=pages.find(x=>x.kind!=='PDF')!;
   return{value,source:`Tipos identificados nos ${new Set(pages.map(x=>x.filename)).size} PDF(s) analisados`,confidence:'Alta'};
 }
 function remetente(pages:Page[]):Pick{
