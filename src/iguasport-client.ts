@@ -1,6 +1,11 @@
 import { IGUASPORT_PROFILE } from './clients/iguasport';
+import { runIguasportAnalysis, type IguasportAnalysisSnapshot } from './clients/iguasport-analysis';
 
 export {};
+
+const escapeHtml=(value:string)=>value.replace(/[&<>'"]/g,char=>({
+  '&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'
+}[char]||char));
 
 function bindIguasport(){
   const panel=document.querySelector<HTMLElement>('.clients-panel');
@@ -55,13 +60,21 @@ function bindIguasport(){
       </label>
     </div>
     <div class="client-mode-status iguasport-mode-status" aria-live="polite">Selecione vários PDFs ou utilize um pacote .ZIP.</div>
-    <button type="button" class="client-analyze-button iguasport-analyze-button" disabled>Análise IGUASPORT em configuração</button>
+    <button type="button" class="client-analyze-button iguasport-analyze-button" disabled>Analisar processo IGUASPORT</button>
   `;
   content.appendChild(detail);
+
+  const report=document.createElement('div');
+  report.className='client-report-view iguasport-report-view';
+  report.setAttribute('aria-hidden','true');
+  content.appendChild(report);
 
   const pdfInput=detail.querySelector<HTMLInputElement>('[data-iguasport-file="pdfs"]')!;
   const zipInput=detail.querySelector<HTMLInputElement>('[data-iguasport-file="zip"]')!;
   const status=detail.querySelector<HTMLElement>('.iguasport-mode-status')!;
+  const analyzeButton=detail.querySelector<HTMLButtonElement>('.iguasport-analyze-button')!;
+
+  const getFiles=()=>({pdfs:[...(pdfInput.files||[])],zip:zipInput.files?.[0]||null});
 
   const setCard=(input:HTMLInputElement)=>{
     const upload=input.closest<HTMLElement>('.client-upload-card');
@@ -78,75 +91,86 @@ function bindIguasport(){
   };
 
   const refresh=()=>{
-    const pdfs=[...(pdfInput.files||[])];
-    const zip=zipInput.files?.[0]||null;
+    const {pdfs,zip}=getFiles();
     setCard(pdfInput);setCard(zipInput);
     if(zip)status.textContent=`ZIP selecionado: ${zip.name}`;
     else if(pdfs.length)status.textContent=`${pdfs.length} PDF${pdfs.length===1?'':'s'} selecionado${pdfs.length===1?'':'s'} para IGUASPORT.`;
     else status.textContent='Selecione vários PDFs ou utilize um pacote .ZIP.';
+    analyzeButton.disabled=!(zip||pdfs.length);
   };
 
-  pdfInput.addEventListener('change',()=>{
-    if(pdfInput.files?.length)zipInput.value='';
-    refresh();
-  });
-  zipInput.addEventListener('change',()=>{
-    if(zipInput.files?.length)pdfInput.value='';
-    refresh();
-  });
+  pdfInput.addEventListener('change',()=>{if(pdfInput.files?.length)zipInput.value='';refresh()});
+  zipInput.addEventListener('change',()=>{if(zipInput.files?.length)pdfInput.value='';refresh()});
 
   detail.querySelectorAll<HTMLButtonElement>('[data-iguasport-clear]').forEach(button=>{
     button.hidden=true;
     button.addEventListener('click',event=>{
-      event.preventDefault();
-      event.stopPropagation();
-      const kind=button.dataset.iguasportClear;
-      const input=detail.querySelector<HTMLInputElement>(`[data-iguasport-file="${kind}"]`);
-      if(input)input.value='';
-      refresh();
+      event.preventDefault();event.stopPropagation();
+      const input=detail.querySelector<HTMLInputElement>(`[data-iguasport-file="${button.dataset.iguasportClear}"]`);
+      if(input)input.value='';refresh();
     });
   });
 
   const hideOtherViews=()=>{
     panel.querySelectorAll<HTMLElement>('.clients-list-view,.client-detail-view,.client-report-view').forEach(view=>{
-      view.classList.remove('active','leaving');
-      view.setAttribute('aria-hidden','true');
+      view.classList.remove('active','leaving');view.setAttribute('aria-hidden','true');
     });
     panel.classList.remove('report-mode');
   };
+  const showList=()=>{hideOtherViews();list.classList.add('active');list.setAttribute('aria-hidden','false')};
+  const showDetail=()=>{hideOtherViews();detail.classList.add('active');detail.setAttribute('aria-hidden','false');detail.scrollTop=0;refresh()};
 
-  const showList=()=>{
-    detail.classList.remove('active');
-    detail.setAttribute('aria-hidden','true');
-    list.classList.add('active');
-    list.setAttribute('aria-hidden','false');
+  const showReport=(analysis:IguasportAnalysisSnapshot)=>{
+    const rows=analysis.fields.map(field=>`
+      <div class="client-report-row">
+        <div class="client-report-field"><b>${escapeHtml(field.label)}</b><span>${escapeHtml(field.source)}</span></div>
+        <div class="client-report-value">${escapeHtml(field.value)}</div>
+        <div class="client-report-confidence">${escapeHtml(field.confidence)}</div>
+      </div>`).join('');
+    report.innerHTML=`
+      <div class="client-report-toolbar">
+        <button type="button" class="client-report-back iguasport-report-back">← IGUASPORT</button>
+        <button type="button" class="client-report-copy iguasport-report-copy">Copiar relatório</button>
+      </div>
+      <div class="client-report-head">
+        <span class="client-report-logo"><img src="${IGUASPORT_PROFILE.logo}" alt="Logo ${IGUASPORT_PROFILE.displayName}"></span>
+        <div><span class="clients-kicker">Relatório por cliente</span><h2>Relatório IGUASPORT</h2><p><b>Cliente do relatório: IGUASPORT</b> · ${escapeHtml(analysis.summary)}</p></div>
+      </div>
+      <div class="client-report-metrics">
+        <div><span>Cliente</span><b>IGUASPORT</b></div>
+        <div><span>Operação</span><b>${escapeHtml(analysis.processType)}</b></div>
+        <div><span>Campos</span><b>${analysis.found}/${analysis.total}</b></div>
+      </div>
+      <div class="client-report-table">${rows}</div>
+      <button type="button" class="client-report-new iguasport-report-new">Nova análise IGUASPORT</button>
+    `;
+    hideOtherViews();panel.classList.add('report-mode');report.classList.add('active');report.setAttribute('aria-hidden','false');report.scrollTop=0;
+    report.querySelector('.iguasport-report-back')?.addEventListener('click',showDetail);
+    report.querySelector('.iguasport-report-new')?.addEventListener('click',()=>{pdfInput.value='';zipInput.value='';showDetail()});
+    report.querySelector('.iguasport-report-copy')?.addEventListener('click',()=>{
+      const text=['Cliente do relatório: IGUASPORT',`Operação: ${analysis.processType}`,'',...analysis.fields.map(f=>`${f.label}: ${f.value}`)].join('\n');
+      void navigator.clipboard?.writeText(text);
+    });
   };
 
-  card.addEventListener('click',()=>{
-    hideOtherViews();
-    detail.classList.add('active');
-    detail.setAttribute('aria-hidden','false');
-    detail.scrollTop=0;
-    refresh();
+  analyzeButton.addEventListener('click',async()=>{
+    const files=getFiles();
+    try{
+      analyzeButton.disabled=true;analyzeButton.textContent='Analisando processo IGUASPORT...';status.textContent='Lendo e cruzando os documentos da IGUASPORT...';
+      const analysis=await runIguasportAnalysis(files);showReport(analysis);
+    }catch(error){status.textContent=error instanceof Error?error.message:'Não foi possível concluir a análise IGUASPORT.'}
+    finally{analyzeButton.textContent='Analisar processo IGUASPORT';refresh()}
   });
+
+  card.addEventListener('click',showDetail);
   detail.querySelector('.iguasport-back')?.addEventListener('click',showList);
-
-  document.querySelector('.clients-tab')?.addEventListener('click',()=>{
-    detail.classList.remove('active');
-    detail.setAttribute('aria-hidden','true');
-  });
-  document.querySelector('.clients-back-tab')?.addEventListener('click',()=>{
-    detail.classList.remove('active');
-    detail.setAttribute('aria-hidden','true');
-  });
-
+  document.querySelector('.clients-tab')?.addEventListener('click',()=>{detail.classList.remove('active');report.classList.remove('active')});
+  document.querySelector('.clients-back-tab')?.addEventListener('click',()=>{detail.classList.remove('active');report.classList.remove('active')});
   refresh();
   return true;
 }
 
 if(!bindIguasport()){
-  const startupObserver=new MutationObserver(()=>{
-    if(bindIguasport())startupObserver.disconnect();
-  });
+  const startupObserver=new MutationObserver(()=>{if(bindIguasport())startupObserver.disconnect()});
   startupObserver.observe(document.documentElement,{childList:true,subtree:true});
 }
