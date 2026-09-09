@@ -9,6 +9,7 @@ type Kind='DUIMP'|'NF-e'|'BL'|'DARE'|'PDF';
 type Candidate={kind:Kind;filename:string;bytes:ArrayBuffer};
 type PdfTextItem={str?:string;transform?:number[];width?:number;height?:number};
 type Box={x:number;y:number;w:number;h:number;cx:number;cy:number};
+type Hit={candidate:Candidate;page:number};
 
 const norm=(value:string)=>value.toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^A-Z0-9]/g,'');
 const esc=(value:string)=>value.replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]||char));
@@ -102,7 +103,7 @@ function anchors(label:string){
 
 async function pageText(pdf:any,n:number){const p=await pdf.getPage(n),c=await p.getTextContent();return(c.items as PdfTextItem[]).map(i=>String(i.str||'')).join(' ')}
 
-async function locate(row:HTMLElement):Promise<Array<{candidate:Candidate;page:number}>>{
+async function locate(row:HTMLElement):Promise<Hit[]>{
   const {label,value,source}=rowData(row),all=await candidates();if(!all.length)return[];
   const parsed=parseSource(source);
   if(parsed){
@@ -110,12 +111,11 @@ async function locate(row:HTMLElement):Promise<Array<{candidate:Candidate;page:n
     const exact=all.find(c=>{const n=c.filename.replace(/\\/g,'/').toLowerCase();return n===wanted||n.endsWith('/'+base)||n.split('/').pop()===base});
     if(exact)return[{candidate:exact,page:parsed.page}];
   }
-  const kinds=preferredKinds(label,value),ordered=[...all].sort((a,b)=>kinds.indexOf(a.kind)-kinds.indexOf(b.kind));
-  if(/Tipo Documento/i.test(label)){
-    const wantedKinds:kindsType[]=[] as any;
-  }
+  const kinds=preferredKinds(label,value),ordered=[...all].sort((a,b)=>{
+    const ai=kinds.indexOf(a.kind),bi=kinds.indexOf(b.kind);return(ai<0?99:ai)-(bi<0?99:bi);
+  });
   const sought=[value,...anchors(label)].map(norm).filter(v=>v.length>=3);
-  const hits:Array<{candidate:Candidate;page:number}>=[];
+  const hits:Hit[]=[];
   for(const candidate of ordered){
     if(!kinds.includes(candidate.kind))continue;
     try{
@@ -130,15 +130,13 @@ async function locate(row:HTMLElement):Promise<Array<{candidate:Candidate;page:n
   }
   if(/Tipo Documento/i.test(label)){
     const needed:Kind[]=[];if(/DUIMP/i.test(value))needed.push('DUIMP');if(/DARE/i.test(value))needed.push('DARE');if(/\bBL\b/i.test(value))needed.push('BL');if(/NF-?e/i.test(value))needed.push('NF-e');
-    const multi:Array<{candidate:Candidate;page:number}>=[];
-    for(const kind of needed){const found=hits.find(h=>h.candidate.kind===kind)||ordered.find(c=>c.kind===kind);if(found&&'candidate' in found)multi.push(found as any);else if(found)multi.push({candidate:found as Candidate,page:1})}
+    const multi:Hit[]=[];
+    for(const kind of needed){const byText=hits.find(h=>h.candidate.kind===kind);if(byText)multi.push(byText);else{const candidate=ordered.find(c=>c.kind===kind);if(candidate)multi.push({candidate,page:1})}}
     if(multi.length)return multi;
   }
   if(/Cont[eê]ineres/i.test(label))return hits.slice(0,4);
   return hits.slice(0,1);
 }
-
-type kindsType=Kind;
 
 function itemBox(item:PdfTextItem,viewport:any,scale:number):Box{
   const t=item.transform||[];const [vx,vy]=viewport.convertToViewportPoint(Number(t[4]||0),Number(t[5]||0));
@@ -148,13 +146,14 @@ function drawBox(ctx:CanvasRenderingContext2D,canvas:HTMLCanvasElement,box:Box,p
   const x=Math.max(0,box.x-pad),y=Math.max(0,box.y-pad),w=Math.min(canvas.width-x,box.w+pad*2),h=Math.min(canvas.height-y,box.h+pad*2);
   ctx.save();ctx.strokeStyle='#c8102e';ctx.lineWidth=4;ctx.fillStyle='rgba(200,16,46,.14)';ctx.fillRect(x,y,w,h);ctx.strokeRect(x,y,w,h);ctx.restore();
 }
-function nearest(items:PdfTextItem[],viewport:any,scale:number,label:string,value:string){
+function findHighlightItems(items:PdfTextItem[],label:string,value:string){
   const usable=items.filter(i=>String(i.str||'').trim()&&i.transform),nv=norm(value),anchorTerms=anchors(label).map(norm);
-  const valueMatches=usable.filter(i=>{const t=norm(String(i.str||''));return t&&nv&&(t===nv||(t.length>=4&&nv.includes(t))||(nv.length>=5&&t.includes(nv)))});
-  if(valueMatches.length)return valueMatches.slice(0,3);
-  const anchorItems=usable.filter(i=>anchorTerms.some(a=>{const t=norm(String(i.str||''));return t.includes(a)||a.includes(t)}));
-  if(anchorItems.length)return anchorItems.slice(0,2);
-  return[];
+  const exact=usable.filter(i=>{const t=norm(String(i.str||''));return t&&nv&&(t===nv||(t.length>=5&&nv.includes(t))||(nv.length>=5&&t.includes(nv)))});
+  if(exact.length)return exact.slice(0,3);
+  const valueTokens=nv.match(/[A-Z0-9]{4,}/g)||[];
+  const partial=usable.filter(i=>{const t=norm(String(i.str||''));return t.length>=4&&valueTokens.some(v=>v.includes(t)||t.includes(v))});
+  if(partial.length)return partial.slice(0,3);
+  return usable.filter(i=>anchorTerms.some(a=>{const t=norm(String(i.str||''));return t.length>=4&&(t.includes(a)||a.includes(t))})).slice(0,2);
 }
 
 function ensureLightbox(){
@@ -165,28 +164,33 @@ function ensureLightbox(){
 }
 function openModal(src:string,alt:string){const m=ensureLightbox(),img=m.querySelector<HTMLImageElement>('img');if(!img)return;img.src=src;img.alt=alt;m.hidden=false}
 
-async function render(row:HTMLElement,hit:{candidate:Candidate;page:number},container:HTMLElement){
+async function render(row:HTMLElement,hit:Hit,container:HTMLElement){
   const {label,value}=rowData(row),pdf=await getDocument({data:new Uint8Array(hit.candidate.bytes.slice(0))}).promise;
   if(hit.page<1||hit.page>pdf.numPages)return;
   const page=await pdf.getPage(hit.page),scale=1.35,viewport=page.getViewport({scale}),canvas=document.createElement('canvas');canvas.width=Math.ceil(viewport.width);canvas.height=Math.ceil(viewport.height);
   const ctx=canvas.getContext('2d');if(!ctx)return;await page.render({canvas,canvasContext:ctx,viewport}).promise;
   let boxes:Box[]=[];
-  try{const content=await page.getTextContent(),items=content.items as PdfTextItem[];boxes=nearest(items,viewport,scale,label,value).map(i=>itemBox(i,viewport,scale));
-    if(/Cont[eê]ineres/i.test(label)){boxes=[];for(const c of value.match(/[A-Z]{4}[-\s]?\d{7}/gi)||[]){const nc=normalizeContainer(c),found=items.find(i=>{const t=normalizeContainer(String(i.str||''));return t===nc||t.includes(nc)||nc.includes(t)});if(found)boxes.push(itemBox(found,viewport,scale))}}
+  try{
+    const content=await page.getTextContent(),items=content.items as PdfTextItem[];
+    if(/Cont[eê]ineres/i.test(label)){
+      for(const c of value.match(/[A-Z]{4}[-\s]?\d{7}/gi)||[]){const nc=normalizeContainer(c),found=items.find(i=>{const t=normalizeContainer(String(i.str||''));return t===nc||t.includes(nc)||nc.includes(t)});if(found)boxes.push(itemBox(found,viewport,scale))}
+    }else boxes=findHighlightItems(items,label,value).map(i=>itemBox(i,viewport,scale));
     boxes.forEach(b=>drawBox(ctx,canvas,b));
   }catch{}
   const wrap=document.createElement('div');wrap.className='client-report-source-preview-card';
   const caption=document.createElement('div');caption.className='client-report-source-preview-caption';caption.textContent=`Print do PDF · ${hit.candidate.filename} · página ${hit.page} · clique para ampliar`;
   const img=document.createElement('img');img.className='client-report-source-preview-image';img.alt=`Origem de ${label} em ${hit.candidate.filename}, página ${hit.page}`;img.src=canvas.toDataURL('image/png');img.tabIndex=0;img.setAttribute('role','button');img.addEventListener('click',()=>openModal(img.src,img.alt));img.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();openModal(img.src,img.alt)}});
-  if(!boxes.length){const note=document.createElement('div');note.className='client-report-preview-marker-note';note.textContent='Página localizada. O destaque vermelho indica a região quando o PDF fornece coordenadas de texto suficientes.';wrap.append(caption,note,img)}else wrap.append(caption,img);
+  if(!boxes.length){const note=document.createElement('div');note.className='client-report-preview-marker-note';note.textContent='A página correta foi localizada, mas o PDF não forneceu coordenadas suficientes para marcar exatamente o texto.';wrap.append(caption,note,img)}else wrap.append(caption,img);
   container.appendChild(wrap);
 }
 
 async function build(row:HTMLElement,preview:HTMLElement){
   if(preview.dataset.iguasportLoaded==='true'||preview.dataset.iguasportLoading==='true')return;
   preview.dataset.iguasportLoading='true';preview.innerHTML='<div class="client-report-preview-loading">Gerando print da fonte IGUASPORT...</div>';
-  try{const hits=await locate(row);preview.replaceChildren();if(!hits.length)throw new Error('Não foi possível localizar visualmente a origem desta informação nos PDFs da IGUASPORT.');for(const hit of hits)await render(row,hit,preview);preview.dataset.iguasportLoaded='true'}
-  catch(error){preview.innerHTML=`<div class="client-report-preview-unavailable">${esc(error instanceof Error?error.message:'Não foi possível gerar o print da fonte IGUASPORT.')}</div>`;preview.dataset.iguasportLoaded='true'}
+  try{
+    const hits=await locate(row);preview.replaceChildren();if(!hits.length)throw new Error('Não foi possível localizar visualmente a origem desta informação nos PDFs da IGUASPORT.');
+    for(const hit of hits)await render(row,hit,preview);preview.dataset.iguasportLoaded='true';
+  }catch(error){preview.innerHTML=`<div class="client-report-preview-unavailable">${esc(error instanceof Error?error.message:'Não foi possível gerar o print da fonte IGUASPORT.')}</div>`;preview.dataset.iguasportLoaded='true'}
   finally{delete preview.dataset.iguasportLoading}
 }
 
