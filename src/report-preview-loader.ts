@@ -9,7 +9,8 @@ function loadReportPreviewTools(){
   loading=Promise.all([
     import('./report-sources'),
     import('./report-weight-preview-fix'),
-    import('./iguasport-report-sources')
+    import('./iguasport-report-sources'),
+    import('./iguasport-agency-preview-exact')
   ]).then(()=>{loaded=true});
   return loading;
 }
