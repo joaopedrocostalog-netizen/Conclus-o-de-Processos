@@ -40,7 +40,7 @@ function itemsToText(items:any[]){
 function classify(text:string,name:string):Kind{
   if(/Extrato\s+da\s+Duimp|\bDUIMP\b/i.test(text))return'DUIMP';
   if(/\bDANFE\b|Nota Fiscal Eletr[oô]nica|VALOR TOTAL DA NOTA/i.test(text))return'NF-e';
-  if(/BILL OF LADING|SHIPPER|CONSIGNEE|CARRIER:/i.test(text)||/\bBL\b/i.test(name))return'BL';
+  if(/BILL OF LADING|B\/L\s*No\.?|SHIPPER|CONSIGNEE|SIGNED\s+FOR\s+THE\s+CARRIER|CARRIER:/i.test(text)||/\bBL\b/i.test(name))return'BL';
   if(/\bDARE-SP\b|Documento de Arrecada[cç][aã]o de Receitas Estaduais/i.test(text))return'DARE';
   return'PDF';
 }
@@ -84,9 +84,13 @@ function remetente(pages:Page[]):Pick{
 }
 function blNumber(pages:Page[]):Pick{
   for(const p of pagesOf(pages,'BL')){
-    const around=p.text.match(/BILL OF LADING NUMBER[\s\S]{0,120}?\b([A-Z]{2,5}\d{6,10})\b/i);if(around?.[1])return picked(around[1],p);
-    const byName=p.filename.match(/(?:^|[-_\s])([A-Z]{2,5}\d{6,10})(?=[-_.\s]|$)/i);if(byName?.[1])return picked(byName[1],p,'identificado também pelo nome do arquivo');
-    const tokens=[...p.text.matchAll(/\b([A-Z]{2,5}\d{6,10})\b/g)].map(m=>m[1]);const candidate=tokens.find(v=>!/^BR/i.test(v));if(candidate)return picked(candidate,p);
+    const direct=p.text.match(/B\s*\/\s*L\s*(?:No\.?|N[oº°]\.?|NUMBER)?\s*[:#-]?\s*([A-Z0-9-]{6,20})/i);
+    if(direct?.[1]&&!/^(NO|NUMBER)$/i.test(direct[1]))return picked(direct[1],p,'B/L No.');
+    const longLabel=p.text.match(/BILL\s+OF\s+LADING\s+(?:NO\.?|NUMBER)\s*[:#-]?\s*([A-Z0-9-]{6,20})/i);
+    if(longLabel?.[1])return picked(longLabel[1],p,'Bill of Lading Number');
+    const around=p.text.match(/BILL OF LADING NUMBER[\s\S]{0,80}?\b([A-Z0-9-]{6,20})\b/i);
+    if(around?.[1]&&!/^(BILL|LADING|NUMBER|VOYAGE)$/i.test(around[1]))return picked(around[1],p);
+    const byName=p.filename.match(/(?:^|[-_\s])([A-Z]{2,5}\d{6,10}|\d{7,12})(?=[-_.\s]|$)/i);if(byName?.[1])return picked(byName[1],p,'identificado também pelo nome do arquivo');
   }return empty();
 }
 function localArmazenagem(pages:Page[]):Pick{
@@ -104,7 +108,9 @@ function operacao(pages:Page[]):Pick{
 }
 function agencia(pages:Page[]):Pick{
   for(const p of pagesOf(pages,'BL')){
-    let m=p.text.match(/as agents for the carrier\s+([^\n]{2,70})/i);if(m?.[1])return picked(m[1].replace(/\s+BY\s*$/i,'').trim(),p,'carrier/agente marítimo');
+    let m=p.text.match(/Signed\s+for\s+the\s+Carrier\s*[:\-]?\s*([^\n]{2,80})/i);
+    if(m?.[1])return picked(m[1].replace(/^[:\-\s]+|\s+(?:AS\s+AGENTS?|BY)\s*$/gi,'').trim(),p,'Signed for the Carrier');
+    m=p.text.match(/as agents for the carrier\s+([^\n]{2,70})/i);if(m?.[1])return picked(m[1].replace(/\s+BY\s*$/i,'').trim(),p,'carrier/agente marítimo');
     m=p.text.match(/CARRIER:\s*\n?\s*([^\n]{2,80})/i);if(m?.[1])return picked(m[1].replace(/Soci[eé]t[eé].*$/i,'').trim(),p,'carrier/agente marítimo');
   }return empty();
 }
