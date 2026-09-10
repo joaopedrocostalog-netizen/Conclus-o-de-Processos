@@ -16,9 +16,10 @@ const esc=(value:string)=>value.replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;
 const normalizeContainer=(value:string)=>value.replace(/[^A-Z0-9]/gi,'').toUpperCase();
 
 function classify(text:string,name:string):Kind{
-  if(/Extrato\s+da\s+Duimp|\bDUIMP\b/i.test(text))return'DUIMP';
+  const strongBl=/BILL OF LADING|B\s*\/\s*L\s*No\.?|SHIPPER|CONSIGNEE|SIGNED\s+FOR\s+THE\s+CARRIER|AGENTS?\s+FOR\s+THE\s+CARRIER|\bEXPORTER\s*:|MAERSK|CMA\s*CGM|HAPAG[- ]LLOYD|MSC\b|COSCO|EVERGREEN|YANG\s*MING|\bZIM\b/i.test(text)||/\bBL\b/i.test(name);
+  if(strongBl)return'BL';
   if(/\bDANFE\b|Nota Fiscal Eletr[oô]nica|VALOR TOTAL DA NOTA/i.test(text))return'NF-e';
-  if(/BILL OF LADING|B\/L\s*No\.?|SHIPPER|CONSIGNEE|SIGNED\s+FOR\s+THE\s+CARRIER|CARRIER:/i.test(text)||/\bBL\b/i.test(name))return'BL';
+  if(/Extrato\s+da\s+Duimp|\bDUIMP\b/i.test(text))return'DUIMP';
   if(/\bDARE-SP\b|Documento de Arrecada[cç][aã]o de Receitas Estaduais/i.test(text))return'DARE';
   return'PDF';
 }
@@ -72,7 +73,7 @@ function rowData(row:HTMLElement){
 function preferredKinds(label:string,value:string):Kind[]{
   if(/^Cliente$/i.test(label))return['DUIMP','NF-e'];
   if(/Tipo Documento/i.test(label))return['DUIMP','DARE','BL','NF-e'];
-  if(/Remetente|Exportador/i.test(label))return['DUIMP','BL'];
+  if(/Remetente|Exportador/i.test(label))return['BL','DUIMP'];
   if(/Nº\s*BL|AWB/i.test(label))return['BL'];
   if(/Agência Marítima/i.test(label))return['BL'];
   if(/Local de Armazenagem|Ref\. do Cliente|Nº Documento/i.test(label))return['DUIMP','NF-e','DARE'];
@@ -87,14 +88,14 @@ function preferredKinds(label:string,value:string):Kind[]{
 function anchors(label:string){
   if(/^Cliente$/i.test(label))return['NOME DO IMPORTADOR','IGUASPORT LTDA'];
   if(/Tipo Documento/i.test(label))return['EXTRATO DA DUIMP','DARE-SP','BILL OF LADING','DANFE'];
-  if(/Remetente|Exportador/i.test(label))return['CÓDIGO DO EXPORTADOR ESTRANGEIRO','SHIPPER'];
+  if(/Remetente|Exportador/i.test(label))return['EXPORTER','SHIPPER','CÓDIGO DO EXPORTADOR ESTRANGEIRO'];
   if(/Nº\s*BL|AWB/i.test(label))return['B/L NO','B/L NO.','BILL OF LADING NUMBER','BILL OF LADING NO'];
   if(/Local de Armazenagem/i.test(label))return['LOCAL DE ARMAZENAMENTO','RECINTO'];
   if(/Ref\. do Cliente/i.test(label))return['REFERÊNCIA DO CLIENTE','REF. CLIENTE'];
   if(/Nº Documento/i.test(label))return['EXTRATO DA DUIMP','DUIMP'];
   if(/Destinatário|Importador/i.test(label))return['NOME DO IMPORTADOR','CONSIGNEE'];
   if(/Operação Marítima/i.test(label))return['PROCESSO DE IMPORTAÇÃO','EXTRATO DA DUIMP','BILL OF LADING'];
-  if(/Agência Marítima/i.test(label))return['SIGNED FOR THE CARRIER','AS AGENTS FOR THE CARRIER','CARRIER'];
+  if(/Agência Marítima/i.test(label))return['SIGNED FOR THE CARRIER','AS AGENTS FOR THE CARRIER','CARRIER','MAERSK','CMA CGM','HAPAG-LLOYD','MSC','COSCO','EVERGREEN','YANG MING','ZIM'];
   if(/CNPJ do Cliente/i.test(label))return['CNPJ DO IMPORTADOR','CNPJ'];
   if(/Cont[eê]ineres/i.test(label))return['CONTAINERS','CONTAINER','CONTAINER AND SEALS','CNTR NO'];
   if(/Peso Líquido/i.test(label))return['PESO LÍQUIDO TOTAL','PESO LÍQUIDO (KG)','PESO LÍQUIDO'];
@@ -157,13 +158,18 @@ function nearestToAnchorValue(items:PdfTextItem[],viewport:any,scale:number,anch
 }
 function findHighlightItems(items:PdfTextItem[],label:string,value:string,viewport:any,scale:number){
   const usable=items.filter(i=>textOf(i)&&i.transform),nv=norm(value),anchorTerms=anchors(label);
+  if(/Remetente|Exportador/i.test(label)){
+    const exact=nearestToAnchorValue(items,viewport,scale,anchorTerms,value);if(exact.length)return exact;
+  }
   if(/Nº\s*BL|AWB/i.test(label)){
     const exact=nearestToAnchorValue(items,viewport,scale,anchorTerms,value);if(exact.length)return exact;
     const numeric=value.replace(/\D/g,'');if(numeric){const hit=usable.find(i=>norm(textOf(i))===numeric);if(hit)return[hit]}
   }
   if(/Agência Marítima/i.test(label)){
     const exact=nearestToAnchorValue(items,viewport,scale,anchorTerms,value);if(exact.length)return exact;
-    const main=value.split(/\s+/).filter(Boolean).slice(0,2).join(' ');const fallback=nearestToAnchorValue(items,viewport,scale,anchorTerms,main);if(fallback.length)return fallback;
+    const carrierTokens=value.split(/\s+/).filter(Boolean).filter(v=>v.length>=2);
+    const carrierHit=usable.find(i=>{const t=norm(textOf(i));return carrierTokens.some(token=>t.includes(norm(token)))&&/(MAERSK|CMA|CGM|MSC|HAPAG|COSCO|EVERGREEN|YANG|ZIM|OCEAN|NETWORK|EXPRESS)/i.test(textOf(i))});
+    if(carrierHit)return[carrierHit];
   }
   const exact=usable.filter(i=>{const t=norm(textOf(i));return t&&nv&&(t===nv||(t.length>=5&&nv.includes(t))||(nv.length>=5&&t.includes(nv)))});
   if(exact.length)return exact.slice(0,3);
