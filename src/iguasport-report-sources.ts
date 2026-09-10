@@ -73,7 +73,7 @@ function rowData(row:HTMLElement){
 function preferredKinds(label:string,value:string):Kind[]{
   if(/^Cliente$/i.test(label))return['DUIMP','NF-e'];
   if(/Tipo Documento/i.test(label))return['DUIMP','DARE','BL','NF-e'];
-  if(/Remetente|Exportador/i.test(label))return['BL','DUIMP'];
+  if(/Remetente|Exportador/i.test(label))return['NF-e','DUIMP','BL'];
   if(/Nº\s*BL|AWB/i.test(label))return['BL'];
   if(/Agência Marítima/i.test(label))return['BL'];
   if(/Local de Armazenagem|Ref\. do Cliente|Nº Documento/i.test(label))return['DUIMP','NF-e','DARE'];
@@ -88,7 +88,7 @@ function preferredKinds(label:string,value:string):Kind[]{
 function anchors(label:string){
   if(/^Cliente$/i.test(label))return['NOME DO IMPORTADOR','IGUASPORT LTDA'];
   if(/Tipo Documento/i.test(label))return['EXTRATO DA DUIMP','DARE-SP','BILL OF LADING','DANFE'];
-  if(/Remetente|Exportador/i.test(label))return['EXPORTER','SHIPPER','CÓDIGO DO EXPORTADOR ESTRANGEIRO'];
+  if(/Remetente|Exportador/i.test(label))return['DESTINATÁRIO/REMETENTE','NOME/RAZÃO SOCIAL','CÓDIGO DO EXPORTADOR ESTRANGEIRO','EXPORTER','SHIPPER'];
   if(/Nº\s*BL|AWB/i.test(label))return['B/L NO','B/L NO.','BILL OF LADING NUMBER','BILL OF LADING NO'];
   if(/Local de Armazenagem/i.test(label))return['LOCAL DE ARMAZENAMENTO','RECINTO'];
   if(/Ref\. do Cliente/i.test(label))return['REFERÊNCIA DO CLIENTE','REF. CLIENTE'];
@@ -103,10 +103,36 @@ function anchors(label:string){
   return[];
 }
 
+function typeAnchors(kind:Kind){
+  if(kind==='DUIMP')return['EXTRATO DA DUIMP','DUIMP'];
+  if(kind==='DARE')return['DARE-SP','DOCUMENTO DE ARRECADAÇÃO DE RECEITAS ESTADUAIS'];
+  if(kind==='BL')return['BILL OF LADING','B/L NO'];
+  if(kind==='NF-e')return['DANFE','NOTA FISCAL ELETRÔNICA','NF-E'];
+  return[];
+}
+
 async function pageText(pdf:any,n:number){const p=await pdf.getPage(n),c=await p.getTextContent();return(c.items as PdfTextItem[]).map(i=>String(i.str||'')).join(' ')}
 
 async function locate(row:HTMLElement):Promise<Hit[]>{
   const {label,value,source}=rowData(row),all=await candidates();if(!all.length)return[];
+  if(/Tipo Documento/i.test(label)){
+    const needed:Kind[]=[];if(/DUIMP/i.test(value))needed.push('DUIMP');if(/DARE/i.test(value))needed.push('DARE');if(/\bBL\b/i.test(value))needed.push('BL');if(/NF-?e/i.test(value))needed.push('NF-e');
+    const multi:Hit[]=[];
+    for(const kind of needed){
+      const candidate=all.find(c=>c.kind===kind);if(!candidate)continue;
+      let pageNumber=1;
+      try{
+        const pdf=await getDocument({data:new Uint8Array(candidate.bytes.slice(0))}).promise;
+        const wanted=typeAnchors(kind).map(norm);
+        for(let n=1;n<=pdf.numPages;n++){
+          const text=norm(await pageText(pdf,n));
+          if(wanted.some(a=>a&&text.includes(a))){pageNumber=n;break}
+        }
+      }catch{}
+      multi.push({candidate,page:pageNumber});
+    }
+    if(multi.length)return multi;
+  }
   const parsed=parseSource(source);
   if(parsed){
     const wanted=parsed.filename.replace(/\\/g,'/').toLowerCase(),base=wanted.split('/').pop()||wanted;
@@ -130,12 +156,6 @@ async function locate(row:HTMLElement):Promise<Hit[]>{
       }
     }catch{}
   }
-  if(/Tipo Documento/i.test(label)){
-    const needed:Kind[]=[];if(/DUIMP/i.test(value))needed.push('DUIMP');if(/DARE/i.test(value))needed.push('DARE');if(/\bBL\b/i.test(value))needed.push('BL');if(/NF-?e/i.test(value))needed.push('NF-e');
-    const multi:Hit[]=[];
-    for(const kind of needed){const byText=hits.find(h=>h.candidate.kind===kind);if(byText)multi.push(byText);else{const candidate=ordered.find(c=>c.kind===kind);if(candidate)multi.push({candidate,page:1})}}
-    if(multi.length)return multi;
-  }
   if(/Cont[eê]ineres/i.test(label))return hits.slice(0,4);
   return hits.slice(0,1);
 }
@@ -156,9 +176,30 @@ function nearestToAnchorValue(items:PdfTextItem[],viewport:any,scale:number,anch
   if(!matches.length)return[];if(!anchorItems.length)return matches.slice(0,1);
   return matches.map(item=>{const b=itemBox(item,viewport,scale);let score=Infinity;for(const anchor of anchorItems){const a=itemBox(anchor,viewport,scale),dy=Math.abs(b.cy-a.cy),dx=Math.abs(b.cx-a.cx);score=Math.min(score,dy*3+dx+(dy>85?900:0))}return{item,score}}).sort((a,b)=>a.score-b.score).slice(0,1).map(x=>x.item);
 }
-function findHighlightItems(items:PdfTextItem[],label:string,value:string,viewport:any,scale:number){
+function documentTypeHighlightItems(items:PdfTextItem[],kind:Kind){
+  const usable=items.filter(i=>textOf(i)&&i.transform),wanted=typeAnchors(kind).map(norm);
+  for(const anchor of wanted){
+    const exact=usable.find(i=>{const t=norm(textOf(i));return t===anchor||t.includes(anchor)||anchor.includes(t)});
+    if(exact)return[exact];
+  }
+  return[];
+}
+function senderHighlightItems(items:PdfTextItem[],value:string,viewport:any,scale:number){
+  const usable=items.filter(i=>textOf(i)&&i.transform),nv=norm(value);
+  const senderAnchors=['DESTINATÁRIO/REMETENTE','NOME/RAZÃO SOCIAL'];
+  const exact=nearestToAnchorValue(items,viewport,scale,senderAnchors,value);if(exact.length)return exact;
+  const tokens=value.split(/\s+/).map(norm).filter(t=>t.length>=4);
+  const matches=usable.filter(i=>{const t=norm(textOf(i));return t&&((nv&&t.includes(nv))||tokens.some(token=>t.includes(token)||token.includes(t)))});
+  if(!matches.length)return[];
+  const anchorNorms=senderAnchors.map(norm),anchorItems=usable.filter(i=>{const t=norm(textOf(i));return anchorNorms.some(a=>t.includes(a)||a.includes(t))});
+  if(!anchorItems.length)return matches.slice(0,1);
+  return matches.map(item=>{const b=itemBox(item,viewport,scale);let score=Infinity;for(const anchor of anchorItems){const a=itemBox(anchor,viewport,scale),dy=Math.abs(b.cy-a.cy),dx=Math.abs(b.cx-a.cx);score=Math.min(score,dy*4+dx+(dy>120?1200:0))}return{item,score}}).sort((a,b)=>a.score-b.score).slice(0,1).map(x=>x.item);
+}
+function findHighlightItems(items:PdfTextItem[],label:string,value:string,viewport:any,scale:number,kind:Kind){
   const usable=items.filter(i=>textOf(i)&&i.transform),nv=norm(value),anchorTerms=anchors(label);
+  if(/Tipo Documento/i.test(label))return documentTypeHighlightItems(items,kind);
   if(/Remetente|Exportador/i.test(label)){
+    if(kind==='NF-e'){const sender=senderHighlightItems(items,value,viewport,scale);if(sender.length)return sender}
     const exact=nearestToAnchorValue(items,viewport,scale,anchorTerms,value);if(exact.length)return exact;
   }
   if(/Nº\s*BL|AWB/i.test(label)){
@@ -206,7 +247,7 @@ async function render(row:HTMLElement,hit:Hit,container:HTMLElement){
   try{
     const content=await page.getTextContent(),items=content.items as PdfTextItem[];
     if(/Cont[eê]ineres/i.test(label))boxes=containerHighlightItems(items,value,viewport,scale).map(i=>itemBox(i,viewport,scale));
-    else boxes=findHighlightItems(items,label,value,viewport,scale).map(i=>itemBox(i,viewport,scale));
+    else boxes=findHighlightItems(items,label,value,viewport,scale,hit.candidate.kind).map(i=>itemBox(i,viewport,scale));
     boxes=boxes.filter((box,index,list)=>!list.some((other,j)=>j<index&&Math.abs(box.cx-other.cx)<8&&Math.abs(box.cy-other.cy)<8));
     boxes.forEach(b=>drawBox(ctx,canvas,b));
   }catch{}
