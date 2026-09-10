@@ -105,7 +105,28 @@ function exporterFromDuimp(p:Page){
   }
   return'';
 }
+function remetenteFromNfe(p:Page){
+  const direct=p.text.match(/DESTINAT[ÁA]RIO\s*\/\s*REMETENTE\s*\n\s*NOME\s*\/\s*RAZ[AÃ]O\s+SOCIAL\s*\n\s*([^\n]+)/i);
+  if(direct?.[1]){const value=cleanParty(direct[1]);if(!invalidParty(value))return value}
+  for(let i=0;i<p.rows.length;i++){
+    if(!/DESTINAT[ÁA]RIO\s*\/\s*REMETENTE/i.test(p.rows[i]))continue;
+    const block=p.rows.slice(i+1,i+10);
+    const nameIndex=block.findIndex(row=>/NOME\s*\/\s*RAZ[AÃ]O\s+SOCIAL/i.test(row));
+    if(nameIndex<0)continue;
+    const same=block[nameIndex].match(/NOME\s*\/\s*RAZ[AÃ]O\s+SOCIAL\s*[:\-]?\s*(.+)$/i);
+    if(same?.[1]){const value=cleanParty(same[1]);if(!invalidParty(value)&&!/^CNPJ\b/i.test(value))return value}
+    for(const row of block.slice(nameIndex+1,nameIndex+4)){
+      if(/^(CNPJ|CPF|ID ESTRANGEIRO|DATA DA EMISS[AÃ]O|ENDERE[CÇ]O)\b/i.test(row))break;
+      const value=cleanParty(row);if(!invalidParty(value))return value;
+    }
+  }
+  return'';
+}
 function remetente(pages:Page[]):Pick{
+  for(const p of pagesOf(pages,'NF-e')){
+    const value=remetenteFromNfe(p);
+    if(value)return picked(value,p,'DESTINATÁRIO/REMETENTE · NOME/RAZÃO SOCIAL na NF-e');
+  }
   for(const p of pagesOf(pages,'DUIMP')){
     const value=exporterFromDuimp(p);
     if(value)return picked(value,p,'Código do Exportador Estrangeiro na DUIMP');
@@ -123,7 +144,7 @@ function remetente(pages:Page[]):Pick{
     const shipperLine=p.text.match(/^\s*SHIPPER\s*:?\s*([^\n]{3,100})\s*$/im);
     if(shipperLine?.[1]){const value=cleanParty(shipperLine[1]);if(!invalidParty(value))return picked(value,p,'SHIPPER no BL')}
   }
-  return empty('Remetente / Exportador não localizado no campo Código do Exportador Estrangeiro da DUIMP nem em EXPORTER/SHIPPER do BL');
+  return empty('Remetente / Exportador não localizado em DESTINATÁRIO/REMETENTE da NF-e, na DUIMP ou no BL da IGUASPORT');
 }
 function blNumber(pages:Page[]):Pick{
   for(const p of blLikePages(pages)){
