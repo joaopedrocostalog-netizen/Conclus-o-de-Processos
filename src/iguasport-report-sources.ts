@@ -95,7 +95,7 @@ function anchors(label:string){
   if(/Nº Documento/i.test(label))return['EXTRATO DA DUIMP','DUIMP'];
   if(/Destinatário|Importador/i.test(label))return['NOME DO IMPORTADOR','CONSIGNEE'];
   if(/Operação Marítima/i.test(label))return['PROCESSO DE IMPORTAÇÃO','EXTRATO DA DUIMP','BILL OF LADING'];
-  if(/Agência Marítima/i.test(label))return['SIGNED FOR THE CARRIER','AS AGENTS FOR THE CARRIER','CARRIER','MAERSK','CMA CGM','HAPAG-LLOYD','MSC','COSCO','EVERGREEN','YANG MING','ZIM'];
+  if(/Agência Marítima/i.test(label))return['SIGNED FOR THE CARRIER','AS AGENTS FOR THE CARRIER'];
   if(/CNPJ do Cliente/i.test(label))return['CNPJ DO IMPORTADOR','CNPJ'];
   if(/Cont[eê]ineres/i.test(label))return['CONTAINERS','CONTAINER','CONTAINER AND SEALS','CNTR NO'];
   if(/Peso Líquido/i.test(label))return['PESO LÍQUIDO TOTAL','PESO LÍQUIDO (KG)','PESO LÍQUIDO'];
@@ -132,6 +132,28 @@ async function locate(row:HTMLElement):Promise<Hit[]>{
       multi.push({candidate,page:pageNumber});
     }
     if(multi.length)return multi;
+  }
+  if(/Agência Marítima/i.test(label)){
+    const nv=norm(value),agencyAnchors=['SIGNEDFORTHECARRIER','ASAGENTSFORTHECARRIER'];
+    const bls=all.filter(c=>c.kind==='BL');
+    for(const candidate of bls){
+      try{
+        const pdf=await getDocument({data:new Uint8Array(candidate.bytes.slice(0))}).promise;
+        for(let n=1;n<=pdf.numPages;n++){
+          const text=norm(await pageText(pdf,n));
+          if(nv&&text.includes(nv)&&agencyAnchors.some(a=>text.includes(a)))return[{candidate,page:n}];
+        }
+      }catch{}
+    }
+    for(const candidate of bls){
+      try{
+        const pdf=await getDocument({data:new Uint8Array(candidate.bytes.slice(0))}).promise;
+        for(let n=1;n<=pdf.numPages;n++){
+          const text=norm(await pageText(pdf,n));
+          if(nv&&text.includes(nv))return[{candidate,page:n}];
+        }
+      }catch{}
+    }
   }
   const parsed=parseSource(source);
   if(parsed){
@@ -195,6 +217,15 @@ function senderHighlightItems(items:PdfTextItem[],value:string,viewport:any,scal
   if(!anchorItems.length)return matches.slice(0,1);
   return matches.map(item=>{const b=itemBox(item,viewport,scale);let score=Infinity;for(const anchor of anchorItems){const a=itemBox(anchor,viewport,scale),dy=Math.abs(b.cy-a.cy),dx=Math.abs(b.cx-a.cx);score=Math.min(score,dy*4+dx+(dy>120?1200:0))}return{item,score}}).sort((a,b)=>a.score-b.score).slice(0,1).map(x=>x.item);
 }
+function agencyHighlightItems(items:PdfTextItem[],value:string,viewport:any,scale:number){
+  const usable=items.filter(i=>textOf(i)&&i.transform),nv=norm(value);
+  const valueMatches=usable.filter(i=>{const t=norm(textOf(i));return t&&nv&&(t===nv||t.includes(nv)||nv.includes(t))});
+  if(!valueMatches.length)return[];
+  const anchorNorms=['SIGNEDFORTHECARRIER','ASAGENTSFORTHECARRIER'];
+  const anchorItems=usable.filter(i=>{const t=norm(textOf(i));return anchorNorms.some(a=>t.includes(a)||a.includes(t))});
+  if(!anchorItems.length)return valueMatches.slice(0,1);
+  return valueMatches.map(item=>{const b=itemBox(item,viewport,scale);let score=Infinity;for(const anchor of anchorItems){const a=itemBox(anchor,viewport,scale),dy=Math.abs(b.cy-a.cy),dx=Math.abs(b.cx-a.cx);score=Math.min(score,dy*5+dx+(dy>110?1500:0))}return{item,score}}).sort((a,b)=>a.score-b.score).slice(0,1).map(x=>x.item);
+}
 function findHighlightItems(items:PdfTextItem[],label:string,value:string,viewport:any,scale:number,kind:Kind){
   const usable=items.filter(i=>textOf(i)&&i.transform),nv=norm(value),anchorTerms=anchors(label);
   if(/Tipo Documento/i.test(label))return documentTypeHighlightItems(items,kind);
@@ -206,12 +237,7 @@ function findHighlightItems(items:PdfTextItem[],label:string,value:string,viewpo
     const exact=nearestToAnchorValue(items,viewport,scale,anchorTerms,value);if(exact.length)return exact;
     const numeric=value.replace(/\D/g,'');if(numeric){const hit=usable.find(i=>norm(textOf(i))===numeric);if(hit)return[hit]}
   }
-  if(/Agência Marítima/i.test(label)){
-    const exact=nearestToAnchorValue(items,viewport,scale,anchorTerms,value);if(exact.length)return exact;
-    const carrierTokens=value.split(/\s+/).filter(Boolean).filter(v=>v.length>=2);
-    const carrierHit=usable.find(i=>{const t=norm(textOf(i));return carrierTokens.some(token=>t.includes(norm(token)))&&/(MAERSK|CMA|CGM|MSC|HAPAG|COSCO|EVERGREEN|YANG|ZIM|OCEAN|NETWORK|EXPRESS)/i.test(textOf(i))});
-    if(carrierHit)return[carrierHit];
-  }
+  if(/Agência Marítima/i.test(label))return agencyHighlightItems(items,value,viewport,scale);
   const exact=usable.filter(i=>{const t=norm(textOf(i));return t&&nv&&(t===nv||(t.length>=5&&nv.includes(t))||(nv.length>=5&&t.includes(nv)))});
   if(exact.length)return exact.slice(0,3);
   const valueTokens=nv.match(/[A-Z0-9]{4,}/g)||[];
