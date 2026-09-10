@@ -88,18 +88,28 @@ function invalidParty(value:string){
   return false;
 }
 function exporterFromDuimp(p:Page){
-  const direct=p.text.match(/C[oó]digo do Exportador Estrangeiro:\s*\n\s*OPE_\d+\s*-\s*([^\n]+)/i);
-  if(direct?.[1]){const value=cleanParty(direct[1]);if(!invalidParty(value))return value}
+  const sources=[p.text,p.flatText];
+  for(const source of sources){
+    const explicit=source.match(/\bOPE[_\s-]*\d+\s*-\s*([A-Z0-9][A-Z0-9 .,&'()\/-]{2,100}?)(?=\s+(?:VERS[AÃ]O|VERSAO|ENDERE[CÇ]O|DADOS\s+DA\s+MERCADORIA|APLICA[CÇ][AÃ]O|FABRICANTE|PA[IÍ]S\b)|$)/i);
+    if(explicit?.[1]){const value=cleanParty(explicit[1]);if(!invalidParty(value))return value}
+  }
   for(let i=0;i<p.rows.length;i++){
-    if(!/^\s*C[oó]digo do Exportador Estrangeiro\s*:?\s*$/i.test(p.rows[i]))continue;
-    for(const row of p.rows.slice(i+1,i+4)){
-      const m=row.match(/^\s*OPE_\d+\s*-\s*(.+)$/i);
+    const row=p.rows[i];
+    const same=row.match(/C[oó]digo do Exportador Estrangeiro\s*:?\s*(?:OPE[_\s-]*\d+\s*-\s*)?(.+)$/i);
+    if(same?.[1]){const value=cleanParty(same[1]);if(!invalidParty(value)&&!/^(VERS[AÃ]O|VERSAO)/i.test(value))return value}
+    if(!/C[oó]digo do Exportador Estrangeiro/i.test(row))continue;
+    for(const next of p.rows.slice(i+1,i+7)){
+      const m=next.match(/(?:^|\s)OPE[_\s-]*\d+\s*-\s*(.+)$/i);
       if(m?.[1]){const value=cleanParty(m[1]);if(!invalidParty(value))return value}
     }
   }
   return'';
 }
 function remetente(pages:Page[]):Pick{
+  for(const p of pagesOf(pages,'DUIMP')){
+    const value=exporterFromDuimp(p);
+    if(value)return picked(value,p,'Código do Exportador Estrangeiro na DUIMP');
+  }
   const blPages=blLikePages(pages).filter(p=>p.page===1);
   for(const p of blPages){
     for(const row of p.rows){
@@ -109,12 +119,11 @@ function remetente(pages:Page[]):Pick{
     const exactLine=p.text.match(/^\s*EXPORTER\s*:\s*([^\n]{3,100})\s*$/im);
     if(exactLine?.[1]){const value=cleanParty(exactLine[1]);if(!invalidParty(value))return picked(value,p,'EXPORTER no BL')}
   }
-  for(const p of pagesOf(pages,'DUIMP')){const value=exporterFromDuimp(p);if(value)return picked(value,p,'Código do Exportador Estrangeiro na DUIMP')}
   for(const p of blPages){
     const shipperLine=p.text.match(/^\s*SHIPPER\s*:?\s*([^\n]{3,100})\s*$/im);
     if(shipperLine?.[1]){const value=cleanParty(shipperLine[1]);if(!invalidParty(value))return picked(value,p,'SHIPPER no BL')}
   }
-  return empty('Remetente / Exportador não localizado em um campo identificado do BL ou da DUIMP da IGUASPORT');
+  return empty('Remetente / Exportador não localizado no campo Código do Exportador Estrangeiro da DUIMP nem em EXPORTER/SHIPPER do BL');
 }
 function blNumber(pages:Page[]):Pick{
   for(const p of blLikePages(pages)){
