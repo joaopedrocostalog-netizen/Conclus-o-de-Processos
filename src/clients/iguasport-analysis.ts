@@ -80,35 +80,41 @@ function cleanParty(value:string){
     .replace(/[|·]+$/g,'')
     .trim();
 }
-function invalidParty(value:string){return !value||value.length<3||/^(VERS[AÃ]O:?|ENDEREÇO:?|PA[IÍ]S:?|N[ÚU]MERO DE IDENTIFICAÇÃO:?|CÓDIGO DO EXPORTADOR ESTRANGEIRO:?|SHIPPER:?|CONSIGNEE:?|NOTIFY PARTY:?|EXPORTER:?)$/i.test(value)}
+function invalidParty(value:string){
+  if(!value||value.length<3)return true;
+  if(/^(VERS[AÃ]O:?|ENDEREÇO:?|PA[IÍ]S:?|N[ÚU]MERO DE IDENTIFICAÇÃO:?|CÓDIGO DO EXPORTADOR ESTRANGEIRO:?|SHIPPER:?|CONSIGNEE:?|NOTIFY PARTY:?|EXPORTER:?)$/i.test(value))return true;
+  if(/\b(assumes?|shipowner|contractual|legal duty|their cargo|terms and conditions|hereunder|thereof|pursuant|shall be|merchant acknowledges|carrier shall)\b/i.test(value))return true;
+  if(value.split(/\s+/).length>14)return true;
+  return false;
+}
 function exporterFromDuimp(p:Page){
+  const direct=p.text.match(/C[oó]digo do Exportador Estrangeiro:\s*\n\s*OPE_\d+\s*-\s*([^\n]+)/i);
+  if(direct?.[1]){const value=cleanParty(direct[1]);if(!invalidParty(value))return value}
   for(let i=0;i<p.rows.length;i++){
-    if(!/C[oó]digo do Exportador Estrangeiro/i.test(p.rows[i]))continue;
-    for(const row of p.rows.slice(i,i+10)){
-      let m=row.match(/\bOPE_\d+\s*-\s*(.+)$/i);
-      if(m?.[1]){const value=cleanParty(m[1]);if(!invalidParty(value))return value}
-      m=row.match(/C[oó]digo do Exportador Estrangeiro\s*:?\s*(?:OPE_\d+\s*-\s*)?(.+)$/i);
+    if(!/^\s*C[oó]digo do Exportador Estrangeiro\s*:?\s*$/i.test(p.rows[i]))continue;
+    for(const row of p.rows.slice(i+1,i+4)){
+      const m=row.match(/^\s*OPE_\d+\s*-\s*(.+)$/i);
       if(m?.[1]){const value=cleanParty(m[1]);if(!invalidParty(value))return value}
     }
   }
-  const m=`${p.text}\n${p.flatText}`.match(/\bOPE_\d+\s*-\s*([^\n]{3,120})/i);
-  if(m?.[1]){const value=cleanParty(m[1]);if(!invalidParty(value))return value}
   return'';
 }
 function remetente(pages:Page[]):Pick{
-  const blPages=blLikePages(pages);
+  const blPages=blLikePages(pages).filter(p=>p.page===1);
   for(const p of blPages){
-    const sources=[...p.rows, p.text, p.flatText];
-    for(const source of sources){
-      const m=source.match(/\bEXPORTER\s*:\s*([A-Z0-9][A-Z0-9 .,&'()\/-]{2,100}?)(?=\s+(?:WOODEN PACKING|CNPJ|CPF|NCM|SHIPPER|CONSIGNEE|NOTIFY|1\s*X\s*\d|SAY\b)|$)/i)||source.match(/\bEXPORTER\s*:\s*([^\n]{3,100})/i);
+    for(const row of p.rows){
+      const m=row.match(/^\s*EXPORTER\s*:\s*(.+?)\s*$/i);
       if(m?.[1]){const value=cleanParty(m[1]);if(!invalidParty(value))return picked(value,p,'EXPORTER no BL')}
     }
-    const shipperText=`${p.text}\n${p.flatText}`;
-    const shipper=shipperText.match(/\bSHIPPER\b\s*[:\-]?\s*([A-Z0-9][A-Z0-9 .,&'()\/-]{2,100}?)(?=\s+(?:CONSIGNEE|NOTIFY PARTY|PRE CARRIAGE|PLACE OF RECEIPT|FREIGHT|VESSEL|PORT OF)|$)/i);
-    if(shipper?.[1]){const value=cleanParty(shipper[1]);if(!invalidParty(value))return picked(value,p,'SHIPPER no BL')}
+    const exactLine=p.text.match(/^\s*EXPORTER\s*:\s*([^\n]{3,100})\s*$/im);
+    if(exactLine?.[1]){const value=cleanParty(exactLine[1]);if(!invalidParty(value))return picked(value,p,'EXPORTER no BL')}
   }
   for(const p of pagesOf(pages,'DUIMP')){const value=exporterFromDuimp(p);if(value)return picked(value,p,'Código do Exportador Estrangeiro na DUIMP')}
-  return empty('Remetente / Exportador não localizado no BL nem na DUIMP da IGUASPORT');
+  for(const p of blPages){
+    const shipperLine=p.text.match(/^\s*SHIPPER\s*:?\s*([^\n]{3,100})\s*$/im);
+    if(shipperLine?.[1]){const value=cleanParty(shipperLine[1]);if(!invalidParty(value))return picked(value,p,'SHIPPER no BL')}
+  }
+  return empty('Remetente / Exportador não localizado em um campo identificado do BL ou da DUIMP da IGUASPORT');
 }
 function blNumber(pages:Page[]):Pick{
   for(const p of blLikePages(pages)){
