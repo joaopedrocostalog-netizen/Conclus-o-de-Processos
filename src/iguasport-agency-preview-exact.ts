@@ -12,26 +12,31 @@ type ExactHit={candidate:Candidate;pageNumber:number;mode:'carrier'|'signed'};
 
 const norm=(value:string)=>value.toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^A-Z0-9]/g,'');
 const textOf=(item:PdfTextItem)=>String(item.str||'').trim();
+let inputCache:Promise<Candidate[]>|null=null;
+const hitCache=new Map<string,Promise<ExactHit|null>>();
+
+function clearCaches(){inputCache=null;hitCache.clear();}
+document.addEventListener('change',event=>{const target=event.target;if(target instanceof HTMLInputElement&&target.matches('[data-iguasport-file]'))clearCaches();});
 
 async function inputPdfs():Promise<Candidate[]>{
-  const out:Candidate[]=[];
-  const pdfInput=document.querySelector<HTMLInputElement>('[data-iguasport-file="pdfs"]');
-  for(const file of [...(pdfInput?.files||[])])out.push({filename:file.name,bytes:await file.arrayBuffer()});
-  const zipFile=document.querySelector<HTMLInputElement>('[data-iguasport-file="zip"]')?.files?.[0];
-  if(zipFile){
-    const zip=await JSZip.loadAsync(zipFile);
-    for(const entry of Object.values(zip.files).filter(e=>!e.dir&&/\.pdf$/i.test(e.name))){
-      out.push({filename:entry.name,bytes:await entry.async('arraybuffer')});
+  if(inputCache)return inputCache;
+  inputCache=(async()=>{
+    const out:Candidate[]=[];
+    const pdfInput=document.querySelector<HTMLInputElement>('[data-iguasport-file="pdfs"]');
+    for(const file of [...(pdfInput?.files||[])])out.push({filename:file.name,bytes:await file.arrayBuffer()});
+    const zipFile=document.querySelector<HTMLInputElement>('[data-iguasport-file="zip"]')?.files?.[0];
+    if(zipFile){
+      const zip=await JSZip.loadAsync(zipFile);
+      for(const entry of Object.values(zip.files).filter(e=>!e.dir&&/\.pdf$/i.test(e.name)))out.push({filename:entry.name,bytes:await entry.async('arraybuffer')});
     }
-  }
-  return out;
+    return out;
+  })();
+  return inputCache;
 }
 
 function itemBox(item:PdfTextItem,viewport:any,scale:number):Box{
-  const t=item.transform||[];
-  const [x,yBase]=viewport.convertToViewportPoint(Number(t[4]||0),Number(t[5]||0));
-  const w=Math.max(18,Number(item.width||0)*scale),h=Math.max(12,Number(item.height||9)*scale);
-  return{x,y:yBase-h,w,h};
+  const t=item.transform||[];const [x,yBase]=viewport.convertToViewportPoint(Number(t[4]||0),Number(t[5]||0));
+  const w=Math.max(18,Number(item.width||0)*scale),h=Math.max(12,Number(item.height||9)*scale);return{x,y:yBase-h,w,h};
 }
 function drawBox(ctx:CanvasRenderingContext2D,canvas:HTMLCanvasElement,box:Box,pad=7){
   const x=Math.max(0,box.x-pad),y=Math.max(0,box.y-pad),w=Math.min(canvas.width-x,box.w+pad*2),h=Math.min(canvas.height-y,box.h+pad*2);
@@ -40,10 +45,7 @@ function drawBox(ctx:CanvasRenderingContext2D,canvas:HTMLCanvasElement,box:Box,p
 function valueBoxInsideCombinedItem(item:PdfTextItem,value:string,viewport:any,scale:number):Box{
   const base=itemBox(item,viewport,scale),raw=textOf(item),rawLower=raw.toLowerCase(),valueLower=value.toLowerCase();
   let index=rawLower.indexOf(valueLower);
-  if(index<0){
-    const carrierIndex=rawLower.indexOf('carrier');
-    if(carrierIndex>=0)index=carrierIndex+'carrier'.length;
-  }
+  if(index<0){const carrierIndex=rawLower.indexOf('carrier');if(carrierIndex>=0)index=carrierIndex+'carrier'.length;}
   if(index<0)return base;
   const start=Math.max(0,index/Math.max(1,raw.length)),len=Math.min(1,Math.max(value.length/Math.max(1,raw.length),.12));
   return{x:base.x+base.w*start,y:base.y,w:Math.max(24,base.w*len),h:base.h};
@@ -51,30 +53,18 @@ function valueBoxInsideCombinedItem(item:PdfTextItem,value:string,viewport:any,s
 
 function findAgencyBox(items:PdfTextItem[],value:string,viewport:any,scale:number):Box|null{
   const usable=items.filter(i=>textOf(i)&&i.transform),nv=norm(value);
-
-  // Prefer the explicit CARRIER block (e.g. "CARRIER: CMA CGM Société Anonyme...").
-  const carrierCombined=usable.find(i=>{
-    const t=norm(textOf(i));
-    return t.includes('CARRIER')&&nv&&t.includes(nv)&&!t.includes('SIGNEDFORTHECARRIER');
-  });
+  const carrierCombined=usable.find(i=>{const t=norm(textOf(i));return t.includes('CARRIER')&&nv&&t.includes(nv)&&!t.includes('SIGNEDFORTHECARRIER')});
   if(carrierCombined)return valueBoxInsideCombinedItem(carrierCombined,value,viewport,scale);
-
   const carrierAnchors=usable.filter(i=>/^\s*CARRIER\s*:?\s*$/i.test(textOf(i))||norm(textOf(i))==='CARRIER');
   const values=usable.filter(i=>{const t=norm(textOf(i));return nv&&(t===nv||t.includes(nv)||nv.includes(t))});
   if(carrierAnchors.length&&values.length){
     let best:{box:Box;score:number}|null=null;
     for(const valueItem of values){
       const vb=itemBox(valueItem,viewport,scale);
-      for(const anchor of carrierAnchors){
-        const ab=itemBox(anchor,viewport,scale),dy=Math.abs((vb.y+vb.h/2)-(ab.y+ab.h/2)),dx=Math.abs(vb.x-(ab.x+ab.w));
-        const score=dy*10+dx+(dy>55?5000:0);
-        if(!best||score<best.score)best={box:vb,score};
-      }
+      for(const anchor of carrierAnchors){const ab=itemBox(anchor,viewport,scale),dy=Math.abs((vb.y+vb.h/2)-(ab.y+ab.h/2)),dx=Math.abs(vb.x-(ab.x+ab.w)),score=dy*10+dx+(dy>55?5000:0);if(!best||score<best.score)best={box:vb,score};}
     }
     if(best&&best.score<5000)return best.box;
   }
-
-  // Fallback for carriers whose BL only has "Signed for the Carrier ...".
   const signedCombined=usable.find(i=>{const t=norm(textOf(i));return t.includes('SIGNEDFORTHECARRIER')&&nv&&t.includes(nv)});
   if(signedCombined)return valueBoxInsideCombinedItem(signedCombined,value,viewport,scale);
   const signedAnchors=usable.filter(i=>norm(textOf(i)).includes('SIGNEDFORTHECARRIER'));
@@ -82,19 +72,15 @@ function findAgencyBox(items:PdfTextItem[],value:string,viewport:any,scale:numbe
     let best:{box:Box;score:number}|null=null;
     for(const valueItem of values){
       const vb=itemBox(valueItem,viewport,scale);
-      for(const anchor of signedAnchors){
-        const ab=itemBox(anchor,viewport,scale),dy=Math.abs((vb.y+vb.h/2)-(ab.y+ab.h/2)),dx=Math.abs(vb.x-ab.x),score=dy*8+dx+(dy>45?5000:0);
-        if(!best||score<best.score)best={box:vb,score};
-      }
+      for(const anchor of signedAnchors){const ab=itemBox(anchor,viewport,scale),dy=Math.abs((vb.y+vb.h/2)-(ab.y+ab.h/2)),dx=Math.abs(vb.x-ab.x),score=dy*8+dx+(dy>45?5000:0);if(!best||score<best.score)best={box:vb,score};}
     }
     if(best&&best.score<5000)return best.box;
   }
   return null;
 }
 
-async function locateExact(value:string):Promise<ExactHit|null>{
+async function locateExactUncached(value:string):Promise<ExactHit|null>{
   const nv=norm(value),files=await inputPdfs();
-  // First choice: exact carrier value in an explicit CARRIER block.
   for(const candidate of files){
     try{
       const pdf=await getDocument({data:new Uint8Array(candidate.bytes.slice(0))}).promise;
@@ -105,7 +91,6 @@ async function locateExact(value:string):Promise<ExactHit|null>{
       }
     }catch{}
   }
-  // Second choice: Signed for the Carrier + exact value.
   for(const candidate of files){
     try{
       const pdf=await getDocument({data:new Uint8Array(candidate.bytes.slice(0))}).promise;
@@ -117,6 +102,13 @@ async function locateExact(value:string):Promise<ExactHit|null>{
     }catch{}
   }
   return null;
+}
+
+function locateExact(value:string){
+  const key=norm(value);
+  let cached=hitCache.get(key);
+  if(!cached){cached=locateExactUncached(value);hitCache.set(key,cached);}
+  return cached;
 }
 
 function ensureModal(){
