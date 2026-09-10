@@ -226,23 +226,37 @@ function pesoLiquido(pages:Page[]):Pick{
   const d=match(pagesOf(pages,'DUIMP'),[/Peso L[ií]quido Total\s*(?:-&gt;|->|:)\s*([0-9.,]+)/i,/Peso L[ií]quido \(kg\):\s*\n?\s*([0-9.,]+)/i]);if(d.value){d.value=`${d.value} kg`;return d}
   const n=match(pagesOf(pages,'NF-e'),[/PESO L[IÍ]QUIDO[\s\n:]*([0-9.,]+)/i]);if(n.value){n.value=`${n.value} kg`;return n}return empty();
 }
+function normalizeMoney(raw:string){
+  const compact=raw.replace(/\s/g,'').replace(/[^0-9.,]/g,'');
+  const digits=compact.replace(/\D/g,'');
+  if(digits.length<3)return'';
+  const integer=digits.slice(0,-2),cents=digits.slice(-2);
+  const grouped=integer.replace(/\B(?=(\d{3})+(?!\d))/g,'.');
+  return `${grouped},${cents}`;
+}
+function moneyCandidates(text:string){
+  const matches=text.match(/\d{1,3}(?:[.\s]\d{3})+[,.]\d{2}|\d+[,.]\d{2}/g)||[];
+  return matches.map(normalizeMoney).filter(Boolean);
+}
 function valorNota(pages:Page[]):Pick{
   for(const p of pagesOf(pages,'NF-e')){
     for(let i=0;i<p.rows.length;i++){
       const row=p.rows[i];
-      const same=row.match(/VALOR TOTAL DA NOTA\s*[:\-]?\s*((?:\d{1,3}(?:\.\d{3})*|\d+),\d{2})\b/i);
-      if(same?.[1])return picked(same[1],p,'VALOR TOTAL DA NOTA na NF-e');
-      if(!/VALOR TOTAL DA NOTA/i.test(row))continue;
-      for(const next of p.rows.slice(i+1,i+4)){
-        const m=next.match(/(?:^|\s)((?:\d{1,3}(?:\.\d{3})*|\d+),\d{2})(?:\s|$)/);
-        if(m?.[1])return picked(m[1],p,'VALOR TOTAL DA NOTA na NF-e');
-        if(/TRANSPORTADOR\/VOLUMES TRANSPORTADOS|NOME\/RAZ[AÃ]O SOCIAL/i.test(next))break;
+      const label=/VALOR TOTAL DA NOTA/i;
+      if(!label.test(row))continue;
+      const afterLabel=row.replace(/^.*?VALOR TOTAL DA NOTA\s*[:\-]?\s*/i,'');
+      const onSameRow=moneyCandidates(afterLabel);
+      if(onSameRow.length)return picked(onSameRow[onSameRow.length-1],p,'VALOR TOTAL DA NOTA na NF-e');
+      for(const next of p.rows.slice(i+1,i+3)){
+        if(/TRANSPORTADOR\/VOLUMES TRANSPORTADOS|NOME\/RAZ[AÃ]O SOCIAL|VALOR TOTAL DOS PRODUTOS|VALOR DO FRETE|VALOR DO SEGURO|DESCONTO|OUTRAS DESPESAS|VALOR TOTAL DO IPI/i.test(next))break;
+        const values=moneyCandidates(next);
+        if(values.length)return picked(values[values.length-1],p,'VALOR TOTAL DA NOTA na NF-e');
       }
     }
-    const sources=[p.text,p.flatText];
-    for(const source of sources){
-      const m=source.match(/VALOR TOTAL DA NOTA[\s:.-]{0,30}((?:\d{1,3}(?:\.\d{3})*|\d+),\d{2})\b/i);
-      if(m?.[1])return picked(m[1],p,'VALOR TOTAL DA NOTA na NF-e');
+    const textMatch=p.text.match(/VALOR TOTAL DA NOTA[^\n]*\n\s*([^\n]+)/i);
+    if(textMatch?.[1]){
+      const values=moneyCandidates(textMatch[1]);
+      if(values.length)return picked(values[values.length-1],p,'VALOR TOTAL DA NOTA na NF-e');
     }
   }
   return empty('Valor Total da Nota não localizado no campo “VALOR TOTAL DA NOTA” da NF-e');
