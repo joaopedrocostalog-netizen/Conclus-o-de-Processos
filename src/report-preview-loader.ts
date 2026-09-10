@@ -10,7 +10,8 @@ function loadReportPreviewTools(){
     import('./report-sources'),
     import('./report-weight-preview-fix'),
     import('./iguasport-report-sources'),
-    import('./iguasport-agency-preview-exact')
+    import('./iguasport-agency-preview-exact'),
+    import('./iguasport-analysis-corrections')
   ]).then(()=>{loaded=true});
   return loading;
 }
