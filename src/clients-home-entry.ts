@@ -9,15 +9,10 @@ function placeClientsButton(){
   if(!entry){
     entry=document.createElement('div');
     entry.className='clients-entry-card';
-    entry.innerHTML=`
-      <div class="clients-entry-copy">
-        <strong>Processos por cliente</strong>
-        <span>Cada cliente possui sua própria base de leitura e conferência, mantendo os relatórios separados e identificados.</span>
-      </div>
-    `;
     hero.appendChild(entry);
   }
 
+  entry.querySelector('.clients-entry-copy')?.remove();
   if(button.parentElement!==entry)entry.appendChild(button);
   return true;
 }
