@@ -153,21 +153,42 @@ async function buildPreview(row:HTMLElement,source:string,container:HTMLElement)
 }
 
 function enhance(root:ParentNode=document){
-  root.querySelectorAll<HTMLElement>('.xcmg-report-view .client-report-row').forEach((row,index)=>{
-    if(row.dataset.xcmgSourceEnhanced==='true')return;
+  const rows=root===document
+    ?document.querySelectorAll<HTMLElement>('.xcmg-report-view .client-report-row')
+    :root instanceof HTMLElement&&root.matches('.client-report-row')&&root.closest('.xcmg-report-view')
+      ?[root]
+      :root.querySelectorAll<HTMLElement>('.client-report-row');
+  rows.forEach((row,index)=>{
+    if(!row.closest('.xcmg-report-view')||row.dataset.xcmgSourceEnhanced==='true')return;
     const field=row.querySelector<HTMLElement>('.client-report-field'),confidence=row.querySelector<HTMLElement>('.client-report-confidence');if(!field||!confidence)return;
     let detail=row.querySelector<HTMLElement>('.client-report-source-detail'),toggle=row.querySelector<HTMLButtonElement>('.client-report-source-toggle');
-    let sourceText=detail?.querySelector<HTMLElement>(':scope > span')?.textContent?.trim()||field.querySelector<HTMLElement>('span')?.textContent?.trim()||'Fonte não informada.';
-    if(!detail||!toggle){
-      field.querySelector<HTMLElement>('span')?.remove();const status=document.createElement('span');status.className='client-report-confidence-text';while(confidence.firstChild)status.appendChild(confidence.firstChild);
-      toggle=document.createElement('button');toggle.type='button';toggle.className='client-report-source-toggle';toggle.setAttribute('aria-expanded','false');toggle.setAttribute('aria-label','Mostrar fonte desta informação');toggle.innerHTML='<span aria-hidden="true">⌄</span>';
-      detail=document.createElement('div');detail.className='client-report-source-detail';detail.id=`xcmg-report-source-${Date.now()}-${index}`;detail.hidden=true;detail.innerHTML=`<b>Fonte da informação</b><span>${esc(sourceText)}</span><div class="client-report-source-preview"></div>`;toggle.setAttribute('aria-controls',detail.id);confidence.append(status,toggle);row.appendChild(detail);row.dataset.sourceEnhanced='true';
-    }
+    const sourceText=detail?.querySelector<HTMLElement>(':scope > span')?.textContent?.trim()||field.querySelector<HTMLElement>('span')?.textContent?.trim()||'Fonte não informada.';
+
+    // XCMG owns its source UI. Rebuild it if another generic preview enhancer touched the row first.
+    if(detail)detail.remove();
+    if(toggle)toggle.remove();
+    field.querySelector<HTMLElement>('span')?.remove();
+    const oldStatus=confidence.querySelector<HTMLElement>('.client-report-confidence-text');
+    const statusText=(oldStatus?.textContent||confidence.textContent||'').trim();
+    confidence.replaceChildren();
+    const status=document.createElement('span');status.className='client-report-confidence-text';status.textContent=statusText;
+    toggle=document.createElement('button');toggle.type='button';toggle.className='client-report-source-toggle';toggle.setAttribute('aria-expanded','false');toggle.setAttribute('aria-label','Mostrar fonte desta informação');toggle.innerHTML='<span aria-hidden="true">⌄</span>';
+    detail=document.createElement('div');detail.className='client-report-source-detail';detail.id=`xcmg-report-source-${Date.now()}-${index}`;detail.hidden=true;detail.innerHTML=`<b>Fonte da informação</b><span>${esc(sourceText)}</span><div class="client-report-source-preview"></div>`;
+    toggle.setAttribute('aria-controls',detail.id);confidence.append(status,toggle);row.appendChild(detail);
+    row.dataset.sourceEnhanced='true';
+
     const preview=detail.querySelector<HTMLElement>('.client-report-source-preview');if(!preview)return;
-    toggle.onclick=event=>{event.preventDefault();event.stopPropagation();const open=toggle!.getAttribute('aria-expanded')==='true';toggle!.setAttribute('aria-expanded',String(!open));toggle!.setAttribute('aria-label',open?'Mostrar fonte desta informação':'Ocultar fonte desta informação');detail!.hidden=open;row.classList.toggle('source-open',!open);if(!open)void buildPreview(row,sourceText,preview)};
+    toggle.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();event.stopImmediatePropagation();const open=toggle!.getAttribute('aria-expanded')==='true';toggle!.setAttribute('aria-expanded',String(!open));toggle!.setAttribute('aria-label',open?'Mostrar fonte desta informação':'Ocultar fonte desta informação');detail!.hidden=open;row.classList.toggle('source-open',!open);if(!open)void buildPreview(row,sourceText,preview)});
     row.dataset.xcmgSourceEnhanced='true';
   });
 }
 
-const observer=new MutationObserver(mutations=>{for(const mutation of mutations)for(const node of mutation.addedNodes){if(node instanceof Element&&(node.matches('.xcmg-report-view')||node.querySelector('.xcmg-report-view')||node.matches('.client-report-row')))enhance(node.matches('.client-report-row')?node.parentNode||document:node)}});
+const observer=new MutationObserver(mutations=>{
+  for(const mutation of mutations){
+    for(const node of mutation.addedNodes){
+      if(!(node instanceof Element))continue;
+      if(node.closest('.xcmg-report-view')||node.matches('.xcmg-report-view')||node.querySelector('.xcmg-report-view'))enhance(document);
+    }
+  }
+});
 const start=()=>{enhance();observer.observe(document.documentElement,{childList:true,subtree:true})};if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',start);else start();
