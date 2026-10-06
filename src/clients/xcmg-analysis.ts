@@ -82,11 +82,21 @@ function declaration(pages:PdfPage[]):Pick{
 }
 function importer(pages:PdfPage[]):Pick{return clientName(pages)}
 function importerCnpj(pages:PdfPage[]):Pick{
+  const cnpj=/\b\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}\b/;
   for(const p of nfePages(pages)){
-    const before=(p.text.split(/DESTINAT[ÁA]RIO\s*\/\s*REMETENTE/i)[0]||p.text);const matches=[...before.matchAll(/\b\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}\b/g)];
-    if(matches.length)return{value:matches[matches.length-1][0],source:pdfSource(p,'CNPJ do emitente / importador'),confidence:'Alta'};
+    if(p.page!==1)continue;
+    const rows=companyRows(p);
+    const recipientIndex=rows.findIndex(row=>/DESTINAT[ÁA]RIO\s*\/\s*REMETENTE/i.test(row));
+    const headerRows=recipientIndex>0?rows.slice(0,recipientIndex):rows.slice(0,30);
+    for(let i=0;i<headerRows.length;i++){
+      if(!/^CNPJ\b/i.test(headerRows[i])&&!/\bCNPJ\b/i.test(headerRows[i]))continue;
+      for(let j=i;j<=Math.min(headerRows.length-1,i+2);j++){
+        const m=headerRows[j].match(cnpj);if(m)return{value:m[0],source:pdfSource(p,'CNPJ do cabeçalho superior direito do DANFE'),confidence:'Alta'};
+      }
+    }
+    for(const row of headerRows){const m=row.match(cnpj);if(m)return{value:m[0],source:pdfSource(p,'CNPJ do cabeçalho superior direito do DANFE'),confidence:'Alta'}}
   }
-  return empty('CNPJ do Cliente / Importador não localizado na área do importador da NF.');
+  return empty('CNPJ do Cliente / Importador não localizado no cabeçalho superior direito da NF.');
 }
 function netWeight(pages:PdfPage[]):Pick{
   for(const p of nfePages(pages)){
