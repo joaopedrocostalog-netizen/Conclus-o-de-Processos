@@ -1,7 +1,11 @@
 import { XCMG_PROFILE } from './clients/xcmg';
-import { readXcmgSpreadsheet } from './clients/xcmg-spreadsheet';
+import { readXcmgSpreadsheet, type XcmgSpreadsheetSnapshot } from './clients/xcmg-spreadsheet';
 
 export {};
+
+const escapeHtml=(value:string)=>value.replace(/[&<>'"]/g,char=>({
+  '&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'
+}[char]||char));
 
 function bindXcmg(){
   const panel=document.querySelector<HTMLElement>('.clients-panel');
@@ -68,6 +72,11 @@ function bindXcmg(){
   `;
   content.appendChild(detail);
 
+  const report=document.createElement('div');
+  report.className='client-report-view xcmg-report-view';
+  report.setAttribute('aria-hidden','true');
+  content.appendChild(report);
+
   const sheetInput=detail.querySelector<HTMLInputElement>('[data-xcmg-file="sheet"]')!;
   const nfInput=detail.querySelector<HTMLInputElement>('[data-xcmg-file="nf"]')!;
   const zipInput=detail.querySelector<HTMLInputElement>('[data-xcmg-file="zip"]')!;
@@ -116,16 +125,83 @@ function bindXcmg(){
   const showList=()=>{hideOtherViews();list.classList.add('active');list.setAttribute('aria-hidden','false')};
   const showDetail=()=>{hideOtherViews();detail.classList.add('active');detail.setAttribute('aria-hidden','false');detail.scrollTop=0;refresh()};
 
+  const showReport=(spreadsheet:XcmgSpreadsheetSnapshot,mode:'NF'|'ZIP',supportFile:File)=>{
+    report.innerHTML=`
+      <div class="client-report-toolbar">
+        <button type="button" class="client-report-back xcmg-report-back">← XCMG</button>
+        <button type="button" class="client-report-copy xcmg-report-copy">Copiar relatório</button>
+      </div>
+      <div class="client-report-head">
+        <span class="client-report-logo"><img src="${XCMG_PROFILE.logo}" alt="Logo ${XCMG_PROFILE.displayName}"></span>
+        <div>
+          <span class="clients-kicker">Relatório por cliente</span>
+          <h2>Relatório XCMG</h2>
+          <p><b>Cliente do relatório: XCMG</b> · Estrutura pronta para receber a lógica exclusiva deste cliente.</p>
+        </div>
+      </div>
+      <div class="client-report-metrics">
+        <div><span>Cliente</span><b>XCMG</b></div>
+        <div><span>Entrada</span><b>Excel + ${mode}</b></div>
+        <div><span>Campos</span><b>0/0</b></div>
+      </div>
+      <div class="client-report-table">
+        <div class="client-report-row">
+          <div class="client-report-field"><b>Planilha Excel</b><span>Arquivo obrigatório da XCMG</span></div>
+          <div class="client-report-value">${escapeHtml(spreadsheet.filename)}</div>
+          <div class="client-report-confidence">Lida</div>
+        </div>
+        <div class="client-report-row">
+          <div class="client-report-field"><b>Documento complementar</b><span>Modo selecionado</span></div>
+          <div class="client-report-value">${escapeHtml(supportFile.name)}</div>
+          <div class="client-report-confidence">${mode}</div>
+        </div>
+        <div class="client-report-row">
+          <div class="client-report-field"><b>Leitura da planilha</b><span>Conferência técnica do arquivo</span></div>
+          <div class="client-report-value">${spreadsheet.sheetNames.length} aba${spreadsheet.sheetNames.length===1?'':'s'} · ${spreadsheet.totalRows} linhas · ${spreadsheet.totalCells} células preenchidas</div>
+          <div class="client-report-confidence">OK</div>
+        </div>
+        <div class="client-report-row xcmg-report-placeholder-row">
+          <div class="client-report-field"><b>Campos do processo XCMG</b><span>Lógica própria ainda não configurada</span></div>
+          <div class="client-report-value">Os campos específicos serão adicionados somente com as regras da XCMG, sem reutilizar lógica de outros clientes.</div>
+          <div class="client-report-confidence">Pendente</div>
+        </div>
+      </div>
+      <button type="button" class="client-report-new xcmg-report-new">Nova análise XCMG</button>
+    `;
+    hideOtherViews();
+    panel.classList.add('report-mode');
+    report.classList.add('active');
+    report.setAttribute('aria-hidden','false');
+    report.scrollTop=0;
+
+    report.querySelector('.xcmg-report-back')?.addEventListener('click',showDetail);
+    report.querySelector('.xcmg-report-new')?.addEventListener('click',()=>{
+      sheetInput.value='';nfInput.value='';zipInput.value='';showDetail();
+    });
+    report.querySelector('.xcmg-report-copy')?.addEventListener('click',()=>{
+      const text=[
+        'Cliente do relatório: XCMG',
+        `Entrada: Excel + ${mode}`,
+        `Planilha: ${spreadsheet.filename}`,
+        `Documento complementar: ${supportFile.name}`,
+        `Leitura da planilha: ${spreadsheet.sheetNames.length} abas, ${spreadsheet.totalRows} linhas, ${spreadsheet.totalCells} células preenchidas`,
+        '',
+        'Campos específicos da XCMG ainda não configurados.'
+      ].join('\n');
+      void navigator.clipboard?.writeText(text);
+    });
+  };
+
   analyzeButton.addEventListener('click',async()=>{
     const sheet=sheetInput.files?.[0]||null,nf=nfInput.files?.[0]||null,zip=zipInput.files?.[0]||null;
     if(!sheet||!(nf||zip)){refresh();return;}
     try{
       analyzeButton.disabled=true;
-      analyzeButton.textContent='Lendo planilha XCMG...';
-      status.textContent='Lendo todas as abas e células da planilha XCMG...';
+      analyzeButton.textContent='Analisando processo XCMG...';
+      status.textContent='Lendo a planilha obrigatória da XCMG...';
       const spreadsheet=await readXcmgSpreadsheet(sheet);
-      const mode=zip?`ZIP ${zip.name}`:`NF ${nf?.name}`;
-      status.textContent=`Planilha lida: ${spreadsheet.sheetNames.length} aba${spreadsheet.sheetNames.length===1?'':'s'}, ${spreadsheet.totalRows} linhas e ${spreadsheet.totalCells} células preenchidas. ${mode} pronto para cruzamento.`;
+      if(zip)showReport(spreadsheet,'ZIP',zip);
+      else if(nf)showReport(spreadsheet,'NF',nf);
     }catch(error){
       status.textContent=error instanceof Error?`Não foi possível ler a planilha: ${error.message}`:'Não foi possível ler a planilha XCMG.';
     }finally{
@@ -136,8 +212,8 @@ function bindXcmg(){
 
   card.addEventListener('click',showDetail);
   detail.querySelector('.xcmg-back')?.addEventListener('click',showList);
-  document.querySelector('.clients-tab')?.addEventListener('click',()=>detail.classList.remove('active'));
-  document.querySelector('.clients-back-tab')?.addEventListener('click',()=>detail.classList.remove('active'));
+  document.querySelector('.clients-tab')?.addEventListener('click',()=>{detail.classList.remove('active');report.classList.remove('active')});
+  document.querySelector('.clients-back-tab')?.addEventListener('click',()=>{detail.classList.remove('active');report.classList.remove('active')});
   refresh();
   return true;
 }
