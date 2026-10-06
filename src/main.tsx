@@ -16,6 +16,7 @@ import './client-report-search.css';
 import './client-session-history.css';
 import './client-capabilities.css';
 import './iguasport-client.css';
+import './xcmg-client.css';
 import './clients-tab';
 import './clients-home-entry';
 import './report-preview-loader';
@@ -27,6 +28,7 @@ import './client-report-search';
 import './client-session-history';
 import './client-capabilities';
 import './iguasport-client';
+import './xcmg-client';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode><App /></React.StrictMode>
