@@ -62,8 +62,19 @@ function exactFieldSelection(items:PdfTextItem[],value:string,label:string){
     if(topExact!==undefined&&topExact>=0)return{targets:[lines[topExact]],context:headerContext(lines,topExact)};
   }
   if(/CNPJ do Cliente/i.test(label)){
-    const topExact=strictIndexes.find(index=>index<28)??strictIndexes[0];
-    if(topExact!==undefined&&topExact>=0){const start=Math.max(0,topExact-2),end=Math.min(lines.length-1,topExact+2);return{targets:[lines[topExact]],context:lines.slice(start,end+1)}}
+    const recipientIndex=findLineByTerms(lines,['DESTINATÁRIO / REMETENTE','DESTINATARIO / REMETENTE']);
+    const headerEnd=recipientIndex>0?recipientIndex:Math.min(lines.length,30);
+    const header=lines.slice(0,headerEnd);
+    const cnpjLabelIndex=header.findIndex(line=>/^CNPJ$/i.test(line.text.trim())||line.normalized==='CNPJ'||line.normalized.startsWith('CNPJ'));
+    if(cnpjLabelIndex>=0){
+      const nv=norm(value);
+      for(let i=cnpjLabelIndex;i<=Math.min(header.length-1,cnpjLabelIndex+2);i++){
+        if(header[i].normalized.includes(nv))return{targets:[header[i]],context:header.slice(Math.max(0,cnpjLabelIndex-1),Math.min(header.length,cnpjLabelIndex+3))};
+      }
+      const fallback=header.findIndex((line,index)=>index>=cnpjLabelIndex&&index<=cnpjLabelIndex+3&&/\d{14}/.test(line.normalized));
+      if(fallback>=0)return{targets:[header[fallback]],context:header.slice(Math.max(0,cnpjLabelIndex-1),Math.min(header.length,cnpjLabelIndex+3))};
+      return{targets:[header[cnpjLabelIndex]],context:header.slice(Math.max(0,cnpjLabelIndex-1),Math.min(header.length,cnpjLabelIndex+3))};
+    }
   }
   if(/Local de Armazenagem/i.test(label)){
     const anchor=findLineByTerms(lines,['RECINTO ALFANDEGADO']);if(anchor>=0){const context=[lines[anchor]],targets:TextLine[]=[];for(let i=anchor;i<=Math.min(lines.length-1,anchor+2);i++){context.push(lines[i]);if(lineHasValue(lines[i],value)||/RECINTOALFANDEGADO/i.test(lines[i].normalized))targets.push(lines[i])}if(!targets.length)targets.push(lines[anchor]);return{targets:[...new Set(targets)],context:[...new Set(context)]}}
