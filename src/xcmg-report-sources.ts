@@ -10,7 +10,7 @@ type PdfTextItem={str?:string;transform?:number[];width?:number;height?:number};
 type Box={x:number;y:number;w:number;h:number};
 type TextLine={items:PdfTextItem[];y:number;text:string;normalized:string};
 const norm=(v:string)=>v.toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^A-Z0-9]/g,'');
-const esc=(v:string)=>v.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]||c));
+const esc=(v:string)=>v.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#39;'}[c]||c));
 let pdfCache:Promise<PdfCandidate[]>|null=null,sheetCache:ReturnType<typeof readXcmgSpreadsheet>|null=null;
 function resetCaches(){pdfCache=null;sheetCache=null}
 document.addEventListener('change',e=>{if(e.target instanceof HTMLInputElement&&e.target.matches('[data-xcmg-file]'))resetCaches()});
@@ -52,11 +52,18 @@ function textLines(items:PdfTextItem[]):TextLine[]{
   return groups.sort((a,b)=>b.y-a.y).map(g=>{const sorted=g.cells.sort((a,b)=>a.x-b.x),lineItems=sorted.map(c=>c.item),text=sorted.map(c=>txt(c.item)).join(' ').replace(/\s+/g,' ').trim();return{items:lineItems,y:g.y,text,normalized:norm(text)}}).filter(l=>l.text);
 }
 function lineHasValue(line:TextLine,value:string){const nv=norm(value);if(!nv)return false;if(line.normalized.includes(nv)||nv.includes(line.normalized))return true;const tokens=value.split(/\s+/).map(norm).filter(t=>t.length>=4);return tokens.length>=2&&tokens.filter(t=>line.normalized.includes(t)).length>=Math.min(2,tokens.length)}
+function strictLineIndexes(lines:TextLine[],value:string){const nv=norm(value);if(!nv)return[];return lines.map((line,index)=>line.normalized.includes(nv)?index:-1).filter(index=>index>=0)}
 function findLineByTerms(lines:TextLine[],terms:string[]){const wanted=terms.map(norm);return lines.findIndex(line=>wanted.some(t=>t&&line.normalized.includes(t)))}
+function headerContext(lines:TextLine[],index:number){const start=Math.max(0,index-1),end=Math.min(lines.length-1,index+4);return lines.slice(start,end+1)}
 function exactFieldSelection(items:PdfTextItem[],value:string,label:string){
-  const lines=textLines(items),valueLineIndexes=lines.map((line,index)=>lineHasValue(line,value)?index:-1).filter(index=>index>=0);
+  const lines=textLines(items),strictIndexes=strictLineIndexes(lines,value),valueLineIndexes=lines.map((line,index)=>lineHasValue(line,value)?index:-1).filter(index=>index>=0);
   if(/^Cliente$/i.test(label)||/Destinatário|Importador/i.test(label)){
-    const index=valueLineIndexes[0];if(index>=0)return{targets:[lines[index]],context:[lines[index]]};
+    const topExact=strictIndexes.find(index=>index<20)??strictIndexes[0];
+    if(topExact!==undefined&&topExact>=0)return{targets:[lines[topExact]],context:headerContext(lines,topExact)};
+  }
+  if(/CNPJ do Cliente/i.test(label)){
+    const topExact=strictIndexes.find(index=>index<28)??strictIndexes[0];
+    if(topExact!==undefined&&topExact>=0){const start=Math.max(0,topExact-2),end=Math.min(lines.length-1,topExact+2);return{targets:[lines[topExact]],context:lines.slice(start,end+1)}}
   }
   if(/Local de Armazenagem/i.test(label)){
     const anchor=findLineByTerms(lines,['RECINTO ALFANDEGADO']);if(anchor>=0){const context=[lines[anchor]],targets:TextLine[]=[];for(let i=anchor;i<=Math.min(lines.length-1,anchor+2);i++){context.push(lines[i]);if(lineHasValue(lines[i],value)||/RECINTOALFANDEGADO/i.test(lines[i].normalized))targets.push(lines[i])}if(!targets.length)targets.push(lines[anchor]);return{targets:[...new Set(targets)],context:[...new Set(context)]}}
@@ -68,7 +75,7 @@ function exactFieldSelection(items:PdfTextItem[],value:string,label:string){
     const anchor=findLineByTerms(lines,['NUMERO DA DECLARACAO','NÚMERO DA DECLARAÇÃO']);if(anchor>=0)return{targets:[lines[anchor]],context:[lines[anchor]]};
   }
   if(/Valor Total da Nota/i.test(label)){
-    const anchor=findLineByTerms(lines,['VALOR TOTAL DA NOTA']);if(anchor>=0){const valueIndex=valueLineIndexes.find(i=>i>=anchor&&i<=anchor+3)??valueLineIndexes[0];if(valueIndex!==undefined&&valueIndex>=0)return{targets:[lines[valueIndex]],context:[lines[anchor],lines[valueIndex]]};return{targets:[lines[anchor]],context:[lines[anchor]]}}
+    const anchor=findLineByTerms(lines,['VALOR TOTAL DA NOTA']);if(anchor>=0){const valueIndex=valueLineIndexes.find(i=>i>=anchor&&i<=anchor+3)??strictIndexes[0]??valueLineIndexes[0];if(valueIndex!==undefined&&valueIndex>=0)return{targets:[lines[valueIndex]],context:[lines[anchor],lines[valueIndex]]};return{targets:[lines[anchor]],context:[lines[anchor]]}}
   }
   return null;
 }
