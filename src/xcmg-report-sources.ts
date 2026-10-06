@@ -10,7 +10,7 @@ type PdfTextItem={str?:string;transform?:number[];width?:number;height?:number};
 type Box={x:number;y:number;w:number;h:number};
 type TextLine={items:PdfTextItem[];y:number;text:string;normalized:string};
 const norm=(v:string)=>v.toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^A-Z0-9]/g,'');
-const esc=(v:string)=>v.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#39;'}[c]||c));
+const esc=(v:string)=>v.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]||c));
 let pdfCache:Promise<PdfCandidate[]>|null=null,sheetCache:ReturnType<typeof readXcmgSpreadsheet>|null=null;
 function resetCaches(){pdfCache=null;sheetCache=null}
 document.addEventListener('change',e=>{if(e.target instanceof HTMLInputElement&&e.target.matches('[data-xcmg-file]'))resetCaches()});
@@ -55,6 +55,35 @@ function lineHasValue(line:TextLine,value:string){const nv=norm(value);if(!nv)re
 function strictLineIndexes(lines:TextLine[],value:string){const nv=norm(value);if(!nv)return[];return lines.map((line,index)=>line.normalized.includes(nv)?index:-1).filter(index=>index>=0)}
 function findLineByTerms(lines:TextLine[],terms:string[]){const wanted=terms.map(norm);return lines.findIndex(line=>wanted.some(t=>t&&line.normalized.includes(t)))}
 function headerContext(lines:TextLine[],index:number){const start=Math.max(0,index-1),end=Math.min(lines.length-1,index+4);return lines.slice(start,end+1)}
+function exactCnpjSelection(lines:TextLine[],value:string){
+  const recipientIndex=findLineByTerms(lines,['DESTINATÁRIO / REMETENTE','DESTINATARIO / REMETENTE']);
+  const header=lines.slice(0,recipientIndex>0?recipientIndex:Math.min(lines.length,35));
+  const wantedDigits=value.replace(/\D/g,'');
+  const labels=header.filter(line=>line.normalized==='CNPJ'||/^CNPJ(?:CPF)?$/.test(line.normalized));
+  const values=header.filter(line=>{
+    const digits=line.text.replace(/\D/g,'');
+    return wantedDigits.length===14&&(digits===wantedDigits||digits.includes(wantedDigits));
+  });
+  if(values.length){
+    let target=values[0],labelLine=labels[0]||null,best=Infinity;
+    for(const candidate of values){
+      for(const anchor of labels){
+        const vertical=anchor.y-candidate.y;
+        const penalty=vertical<0?10000:0;
+        const score=Math.abs(vertical)+penalty;
+        if(score<best){best=score;target=candidate;labelLine=anchor}
+      }
+    }
+    return{targets:[target],context:labelLine?[labelLine,target]:[target]};
+  }
+  const exact14=header.filter(line=>line.text.replace(/\D/g,'').length===14);
+  if(exact14.length&&labels.length){
+    let target=exact14[0],labelLine=labels[0],best=Infinity;
+    for(const candidate of exact14)for(const anchor of labels){const vertical=anchor.y-candidate.y,score=Math.abs(vertical)+(vertical<0?10000:0);if(score<best){best=score;target=candidate;labelLine=anchor}}
+    return{targets:[target],context:[labelLine,target]};
+  }
+  return null;
+}
 function exactFieldSelection(items:PdfTextItem[],value:string,label:string){
   const lines=textLines(items),strictIndexes=strictLineIndexes(lines,value),valueLineIndexes=lines.map((line,index)=>lineHasValue(line,value)?index:-1).filter(index=>index>=0);
   if(/^Cliente$/i.test(label)||/Destinatário|Importador/i.test(label)){
@@ -62,19 +91,7 @@ function exactFieldSelection(items:PdfTextItem[],value:string,label:string){
     if(topExact!==undefined&&topExact>=0)return{targets:[lines[topExact]],context:headerContext(lines,topExact)};
   }
   if(/CNPJ do Cliente/i.test(label)){
-    const recipientIndex=findLineByTerms(lines,['DESTINATÁRIO / REMETENTE','DESTINATARIO / REMETENTE']);
-    const headerEnd=recipientIndex>0?recipientIndex:Math.min(lines.length,30);
-    const header=lines.slice(0,headerEnd);
-    const cnpjLabelIndex=header.findIndex(line=>/^CNPJ$/i.test(line.text.trim())||line.normalized==='CNPJ'||line.normalized.startsWith('CNPJ'));
-    if(cnpjLabelIndex>=0){
-      const nv=norm(value);
-      for(let i=cnpjLabelIndex;i<=Math.min(header.length-1,cnpjLabelIndex+2);i++){
-        if(header[i].normalized.includes(nv))return{targets:[header[i]],context:header.slice(Math.max(0,cnpjLabelIndex-1),Math.min(header.length,cnpjLabelIndex+3))};
-      }
-      const fallback=header.findIndex((line,index)=>index>=cnpjLabelIndex&&index<=cnpjLabelIndex+3&&/\d{14}/.test(line.normalized));
-      if(fallback>=0)return{targets:[header[fallback]],context:header.slice(Math.max(0,cnpjLabelIndex-1),Math.min(header.length,cnpjLabelIndex+3))};
-      return{targets:[header[cnpjLabelIndex]],context:header.slice(Math.max(0,cnpjLabelIndex-1),Math.min(header.length,cnpjLabelIndex+3))};
-    }
+    const exact=exactCnpjSelection(lines,value);if(exact)return exact;
   }
   if(/Local de Armazenagem/i.test(label)){
     const anchor=findLineByTerms(lines,['RECINTO ALFANDEGADO']);if(anchor>=0){const context=[lines[anchor]],targets:TextLine[]=[];for(let i=anchor;i<=Math.min(lines.length-1,anchor+2);i++){context.push(lines[i]);if(lineHasValue(lines[i],value)||/RECINTOALFANDEGADO/i.test(lines[i].normalized))targets.push(lines[i])}if(!targets.length)targets.push(lines[anchor]);return{targets:[...new Set(targets)],context:[...new Set(context)]}}
