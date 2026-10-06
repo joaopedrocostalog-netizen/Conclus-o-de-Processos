@@ -20,6 +20,7 @@ import './xcmg-client.css';
 import './clients-tab';
 import './clients-home-entry';
 import './xcmg-report-sources';
+import './xcmg-cnpj-preview-exact';
 import './report-preview-loader';
 import './client-analysis-progress';
 import './client-field-copy';
