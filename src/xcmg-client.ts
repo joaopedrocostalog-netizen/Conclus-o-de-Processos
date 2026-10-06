@@ -1,6 +1,7 @@
 import { XCMG_PROFILE } from './clients/xcmg';
 import { readXcmgSpreadsheet } from './clients/xcmg-spreadsheet';
 import { runXcmgAnalysis, type XcmgAnalysisSnapshot } from './clients/xcmg-analysis';
+import { findXcmgNetWeight } from './clients/xcmg-weight-fix';
 
 export {};
 
@@ -154,6 +155,13 @@ function bindXcmg(){
       analyzeButton.disabled=true;analyzeButton.textContent='Analisando processo XCMG...';status.textContent='Lendo e cruzando a planilha com os documentos da XCMG...';
       const spreadsheet=await readXcmgSpreadsheet(sheet);
       const analysis=await runXcmgAnalysis({spreadsheet,nf,zip});
+      const weight=await findXcmgNetWeight(nf,zip);
+      if(weight){
+        const field=analysis.fields.find(item=>item.label==='Peso Líquido');
+        if(field){field.value=weight.value;field.source=weight.source;field.confidence='Alta'}
+        analysis.found=analysis.fields.filter(item=>item.value!=='—').length;
+        analysis.summary=`${analysis.found}/${analysis.total} campos localizados nos arquivos enviados`;
+      }
       showReport(analysis);
     }catch(error){status.textContent=error instanceof Error?error.message:'Não foi possível concluir a análise XCMG.'}
     finally{analyzeButton.textContent='Analisar processo XCMG';refresh()}
