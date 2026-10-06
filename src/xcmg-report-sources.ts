@@ -8,6 +8,7 @@ export {};
 type PdfCandidate={filename:string;bytes:ArrayBuffer};
 type PdfTextItem={str?:string;transform?:number[];width?:number;height?:number};
 type Box={x:number;y:number;w:number;h:number};
+type TextLine={items:PdfTextItem[];y:number;text:string;normalized:string};
 const norm=(v:string)=>v.toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^A-Z0-9]/g,'');
 const esc=(v:string)=>v.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]||c));
 let pdfCache:Promise<PdfCandidate[]>|null=null,sheetCache:ReturnType<typeof readXcmgSpreadsheet>|null=null;
@@ -27,13 +28,14 @@ function sameFile(a:string,b:string){const aa=a.replace(/\\/g,'/').toLowerCase()
 function ensureLightbox(){let modal=document.querySelector<HTMLElement>('.client-report-preview-modal');if(modal)return modal;modal=document.createElement('div');modal.className='client-report-preview-modal';modal.hidden=true;modal.innerHTML='<button type="button" class="client-report-preview-modal-close" aria-label="Fechar visualização">×</button><div class="client-report-preview-modal-body"><img alt="Visualização ampliada da fonte"></div>';document.body.appendChild(modal);const close=()=>{if(modal)modal.hidden=true};modal.addEventListener('click',e=>{if(e.target===modal)close()});modal.querySelector('.client-report-preview-modal-close')?.addEventListener('click',close);document.addEventListener('keydown',e=>{if(e.key==='Escape'&&modal&&!modal.hidden)close()});return modal}
 function openPreview(src:string,alt:string){const m=ensureLightbox(),img=m.querySelector<HTMLImageElement>('img');if(img){img.src=src;img.alt=alt;m.hidden=false}}
 function itemBox(item:PdfTextItem,viewport:any,scale:number):Box{const t=item.transform||[],p=viewport.convertToViewportPoint(Number(t[4]||0),Number(t[5]||0)),h=Math.max(12,Number(item.height||9)*scale);return{x:p[0],y:p[1]-h,w:Math.max(18,Number(item.width||0)*scale),h}}
-function drawBox(ctx:CanvasRenderingContext2D,canvas:HTMLCanvasElement,b:Box){const p=7,x=Math.max(0,b.x-p),y=Math.max(0,b.y-p),w=Math.min(canvas.width-x,b.w+p*2),h=Math.min(canvas.height-y,b.h+p*2);ctx.save();ctx.strokeStyle='#c8102e';ctx.lineWidth=4;ctx.fillStyle='rgba(200,16,46,.14)';ctx.fillRect(x,y,w,h);ctx.strokeRect(x,y,w,h);ctx.restore()}
+function mergeBoxes(boxes:Box[]):Box|null{if(!boxes.length)return null;const x=Math.min(...boxes.map(b=>b.x)),y=Math.min(...boxes.map(b=>b.y)),right=Math.max(...boxes.map(b=>b.x+b.w)),bottom=Math.max(...boxes.map(b=>b.y+b.h));return{x,y,w:right-x,h:bottom-y}}
+function drawBox(ctx:CanvasRenderingContext2D,canvas:HTMLCanvasElement,b:Box){const p=7,x=Math.max(0,b.x-p),y=Math.max(0,b.y-p),w=Math.min(canvas.width-x,b.w+p*2),h=Math.min(canvas.height-y,b.h+p*2);ctx.save();ctx.strokeStyle='#c8102e';ctx.lineWidth=4;ctx.fillStyle='rgba(200,16,46,.12)';ctx.fillRect(x,y,w,h);ctx.strokeRect(x,y,w,h);ctx.restore()}
 const txt=(i:PdfTextItem)=>String(i.str||'').trim();
 function findValue(items:PdfTextItem[],value:string){const nv=norm(value),u=items.filter(i=>txt(i)&&i.transform);let m=u.filter(i=>{const t=norm(txt(i));return nv&&t&&(t===nv||(t.length>=5&&nv.length>=5&&(t.includes(nv)||nv.includes(t))))});if(m.length)return m;const tokens=value.split(/\s+/).map(norm).filter(t=>t.length>=5);return u.filter(i=>{const t=norm(txt(i));return tokens.some(k=>t===k||(t.length>=5&&(t.includes(k)||k.includes(t))))})}
 function findAnchors(items:PdfTextItem[],terms:string[]){const a=terms.map(norm);return items.filter(i=>{const t=norm(txt(i));return t&&a.some(k=>t===k||t.includes(k)||k.includes(t))})}
 function nearest(matches:PdfTextItem[],anchors:PdfTextItem[],viewport:any,scale:number,mode:'below'|'right'|'near'){if(!matches.length)return[];if(!anchors.length)return matches.slice(0,1);return matches.map(item=>{const b=itemBox(item,viewport,scale),bc={x:b.x+b.w/2,y:b.y+b.h/2};let s=Infinity;for(const a of anchors){const ab=itemBox(a,viewport,scale),ac={x:ab.x+ab.w/2,y:ab.y+ab.h/2},dx=bc.x-ac.x,dy=bc.y-ac.y;let q=Math.abs(dx)+Math.abs(dy)*2;if(mode==='below'&&dy< -8)q+=1800;if(mode==='right'&&dx< -8)q+=1800;if(Math.abs(dy)>180)q+=1200;s=Math.min(s,q)}return{item,s}}).sort((a,b)=>a.s-b.s).slice(0,1).map(x=>x.item)}
 function anchorTerms(label:string){
-  if(/^Cliente$/i.test(label)||/Destinatário|Importador/i.test(label))return['DANFE','CHAVE DE ACESSO'];
+  if(/^Cliente$/i.test(label)||/Destinatário|Importador/i.test(label))return['XCMG BRASIL INDUSTRIA LTDA'];
   if(/Remetente|Exportador/i.test(label))return['DESTINATÁRIO / REMETENTE','DESTINATARIO / REMETENTE','NOME/RAZÃO SOCIAL'];
   if(/Local de Armazenagem/i.test(label))return['RECINTO ALFANDEGADO'];
   if(/Ref\. do Cliente/i.test(label))return['REF. CLIENTE','REF CLIENTE'];
@@ -43,11 +45,48 @@ function anchorTerms(label:string){
   if(/Valor Total da Nota/i.test(label))return['VALOR TOTAL DA NOTA'];
   return[];
 }
-function selectPdfItems(items:PdfTextItem[],value:string,label:string,viewport:any,scale:number){const matches=findValue(items,value),anchors=findAnchors(items,anchorTerms(label));if(/Remetente|Exportador|CNPJ do Cliente|Peso Líquido|Valor Total da Nota/i.test(label))return nearest(matches,anchors,viewport,scale,'below');if(/Local de Armazenagem|Ref\. do Cliente|Nº Documento/i.test(label))return nearest(matches,anchors,viewport,scale,'right');return nearest(matches,anchors,viewport,scale,'near')}
-function crop(canvas:HTMLCanvasElement,boxes:Box[],anchors:Box[]){const all=[...boxes,...anchors.slice(0,1)];if(!all.length)return canvas;const minX=Math.min(...all.map(b=>b.x)),minY=Math.min(...all.map(b=>b.y)),maxX=Math.max(...all.map(b=>b.x+b.w)),maxY=Math.max(...all.map(b=>b.y+b.h)),px=110,py=65,sx=Math.max(0,Math.floor(minX-px)),sy=Math.max(0,Math.floor(minY-py)),sw=Math.min(canvas.width-sx,Math.ceil(maxX-minX+px*2)),sh=Math.min(canvas.height-sy,Math.ceil(maxY-minY+py*2));const out=document.createElement('canvas');out.width=Math.max(1,sw);out.height=Math.max(1,sh);out.getContext('2d')?.drawImage(canvas,sx,sy,sw,sh,0,0,sw,sh);return out}
+function textLines(items:PdfTextItem[]):TextLine[]{
+  const usable=items.filter(i=>txt(i)&&i.transform).map(i=>({item:i,y:Number(i.transform?.[5]||0),x:Number(i.transform?.[4]||0)}));
+  const groups:Array<{y:number;cells:typeof usable}>=[];
+  for(const cell of usable){let g=groups.find(group=>Math.abs(group.y-cell.y)<=2.8);if(!g){g={y:cell.y,cells:[]};groups.push(g)}g.cells.push(cell)}
+  return groups.sort((a,b)=>b.y-a.y).map(g=>{const sorted=g.cells.sort((a,b)=>a.x-b.x),lineItems=sorted.map(c=>c.item),text=sorted.map(c=>txt(c.item)).join(' ').replace(/\s+/g,' ').trim();return{items:lineItems,y:g.y,text,normalized:norm(text)}}).filter(l=>l.text);
+}
+function lineHasValue(line:TextLine,value:string){const nv=norm(value);if(!nv)return false;if(line.normalized.includes(nv)||nv.includes(line.normalized))return true;const tokens=value.split(/\s+/).map(norm).filter(t=>t.length>=4);return tokens.length>=2&&tokens.filter(t=>line.normalized.includes(t)).length>=Math.min(2,tokens.length)}
+function findLineByTerms(lines:TextLine[],terms:string[]){const wanted=terms.map(norm);return lines.findIndex(line=>wanted.some(t=>t&&line.normalized.includes(t)))}
+function exactFieldSelection(items:PdfTextItem[],value:string,label:string){
+  const lines=textLines(items),valueLineIndexes=lines.map((line,index)=>lineHasValue(line,value)?index:-1).filter(index=>index>=0);
+  if(/^Cliente$/i.test(label)||/Destinatário|Importador/i.test(label)){
+    const index=valueLineIndexes[0];if(index>=0)return{targets:[lines[index]],context:[lines[index]]};
+  }
+  if(/Local de Armazenagem/i.test(label)){
+    const anchor=findLineByTerms(lines,['RECINTO ALFANDEGADO']);if(anchor>=0){const context=[lines[anchor]],targets:TextLine[]=[];for(let i=anchor;i<=Math.min(lines.length-1,anchor+2);i++){context.push(lines[i]);if(lineHasValue(lines[i],value)||/RECINTOALFANDEGADO/i.test(lines[i].normalized))targets.push(lines[i])}if(!targets.length)targets.push(lines[anchor]);return{targets:[...new Set(targets)],context:[...new Set(context)]}}
+  }
+  if(/Ref\. do Cliente/i.test(label)){
+    const anchor=findLineByTerms(lines,['REF CLIENTE','REF. CLIENTE']);if(anchor>=0)return{targets:[lines[anchor]],context:[lines[anchor]]};
+  }
+  if(/Nº Documento/i.test(label)){
+    const anchor=findLineByTerms(lines,['NUMERO DA DECLARACAO','NÚMERO DA DECLARAÇÃO']);if(anchor>=0)return{targets:[lines[anchor]],context:[lines[anchor]]};
+  }
+  if(/Valor Total da Nota/i.test(label)){
+    const anchor=findLineByTerms(lines,['VALOR TOTAL DA NOTA']);if(anchor>=0){const valueIndex=valueLineIndexes.find(i=>i>=anchor&&i<=anchor+3)??valueLineIndexes[0];if(valueIndex!==undefined&&valueIndex>=0)return{targets:[lines[valueIndex]],context:[lines[anchor],lines[valueIndex]]};return{targets:[lines[anchor]],context:[lines[anchor]]}}
+  }
+  return null;
+}
+function selectPdfItems(items:PdfTextItem[],value:string,label:string,viewport:any,scale:number){const exact=exactFieldSelection(items,value,label);if(exact)return{selected:exact.targets.flatMap(line=>line.items),context:exact.context.flatMap(line=>line.items)};const matches=findValue(items,value),anchors=findAnchors(items,anchorTerms(label));let selected:PdfTextItem[];if(/Remetente|Exportador|CNPJ do Cliente|Peso Líquido|Valor Total da Nota/i.test(label))selected=nearest(matches,anchors,viewport,scale,'below');else if(/Local de Armazenagem|Ref\. do Cliente|Nº Documento/i.test(label))selected=nearest(matches,anchors,viewport,scale,'right');else selected=nearest(matches,anchors,viewport,scale,'near');return{selected,context:[...anchors,...selected]}}
+function crop(canvas:HTMLCanvasElement,boxes:Box[]){if(!boxes.length)return canvas;const minX=Math.min(...boxes.map(b=>b.x)),minY=Math.min(...boxes.map(b=>b.y)),maxX=Math.max(...boxes.map(b=>b.x+b.w)),maxY=Math.max(...boxes.map(b=>b.y+b.h)),px=75,py=45,sx=Math.max(0,Math.floor(minX-px)),sy=Math.max(0,Math.floor(minY-py)),sw=Math.min(canvas.width-sx,Math.ceil(maxX-minX+px*2)),sh=Math.min(canvas.height-sy,Math.ceil(maxY-minY+py*2));const out=document.createElement('canvas');out.width=Math.max(1,sw);out.height=Math.max(1,sh);out.getContext('2d')?.drawImage(canvas,sx,sy,sw,sh,0,0,sw,sh);return out}
 
 async function renderPdf(row:HTMLElement,parsed:NonNullable<ReturnType<typeof parsePdfSource>>,container:HTMLElement){
-  const all=await pdfCandidates(),candidate=all.find(x=>sameFile(x.filename,parsed.filename));if(!candidate)throw new Error('O PDF usado como fonte não está mais disponível nesta análise.');const pdf=await getDocument({data:new Uint8Array(candidate.bytes.slice(0))}).promise;if(parsed.page<1||parsed.page>pdf.numPages)throw new Error('Página da fonte não localizada.');const page=await pdf.getPage(parsed.page),scale=1.9,viewport=page.getViewport({scale}),canvas=document.createElement('canvas');canvas.width=Math.ceil(viewport.width);canvas.height=Math.ceil(viewport.height);const ctx=canvas.getContext('2d');if(!ctx)throw new Error('Não foi possível gerar o print.');await page.render({canvas,canvasContext:ctx,viewport}).promise;const content=await page.getTextContent(),items=content.items as PdfTextItem[],{label,value}=rowData(row),selected=selectPdfItems(items,value,label,viewport,scale),boxes=selected.map(i=>itemBox(i,viewport,scale)),anchors=findAnchors(items,anchorTerms(label)).map(i=>itemBox(i,viewport,scale));boxes.forEach(b=>drawBox(ctx,canvas,b));if(!boxes.length&&anchors.length)drawBox(ctx,canvas,anchors[0]);const output=crop(canvas,boxes,anchors);const wrap=document.createElement('div');wrap.className='client-report-source-preview-card';const caption=document.createElement('div');caption.className='client-report-source-preview-caption';caption.textContent=`Print da NF · ${parsed.filename} · página ${parsed.page} · ${parsed.note} · clique para ampliar`;const img=document.createElement('img');img.className='client-report-source-preview-image';img.src=output.toDataURL('image/png');img.alt=`Print da fonte ${label} na NF`;img.tabIndex=0;img.setAttribute('role','button');img.addEventListener('click',()=>openPreview(img.src,img.alt));img.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();openPreview(img.src,img.alt)}});wrap.append(caption,img);if(!boxes.length){const n=document.createElement('div');n.className='client-report-preview-marker-note';n.textContent='A área correta do campo foi localizada; o PDF não separou o valor em um bloco de texto individual para marcação.';wrap.append(n)}container.appendChild(wrap)
+  const all=await pdfCandidates(),candidate=all.find(x=>sameFile(x.filename,parsed.filename));if(!candidate)throw new Error('O PDF usado como fonte não está mais disponível nesta análise.');
+  const pdf=await getDocument({data:new Uint8Array(candidate.bytes.slice(0))}).promise;if(parsed.page<1||parsed.page>pdf.numPages)throw new Error('Página da fonte não localizada.');
+  const page=await pdf.getPage(parsed.page),scale=1.9,viewport=page.getViewport({scale}),canvas=document.createElement('canvas');canvas.width=Math.ceil(viewport.width);canvas.height=Math.ceil(viewport.height);const ctx=canvas.getContext('2d');if(!ctx)throw new Error('Não foi possível gerar o print.');
+  await page.render({canvas,canvasContext:ctx,viewport}).promise;
+  const content=await page.getTextContent(),items=content.items as PdfTextItem[],{label,value}=rowData(row),selection=selectPdfItems(items,value,label,viewport,scale);
+  const targetLineBoxes:Box[]=[];const targetLines=textLines(selection.selected);if(targetLines.length){for(const line of targetLines){const b=mergeBoxes(line.items.map(i=>itemBox(i,viewport,scale)));if(b)targetLineBoxes.push(b)}}else{const b=mergeBoxes(selection.selected.map(i=>itemBox(i,viewport,scale)));if(b)targetLineBoxes.push(b)}
+  targetLineBoxes.forEach(b=>drawBox(ctx,canvas,b));
+  const contextBoxes=selection.context.map(i=>itemBox(i,viewport,scale));const output=crop(canvas,[...targetLineBoxes,...contextBoxes]);
+  const wrap=document.createElement('div');wrap.className='client-report-source-preview-card';const caption=document.createElement('div');caption.className='client-report-source-preview-caption';caption.textContent=`Print da NF · ${parsed.filename} · página ${parsed.page} · ${parsed.note} · clique para ampliar`;
+  const img=document.createElement('img');img.className='client-report-source-preview-image';img.src=output.toDataURL('image/png');img.alt=`Print da fonte ${label} na NF`;img.tabIndex=0;img.setAttribute('role','button');img.addEventListener('click',()=>openPreview(img.src,img.alt));img.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();openPreview(img.src,img.alt)}});wrap.append(caption,img);
+  if(!targetLineBoxes.length){const n=document.createElement('div');n.className='client-report-preview-marker-note';n.textContent='A área correta do campo foi localizada; o PDF não separou o valor em um bloco de texto individual para marcação.';wrap.append(n)}container.appendChild(wrap)
 }
 
 function parseCell(ref:string){const m=ref.trim().match(/^([A-Z]+)(\d+)$/i);if(!m)return null;let col=0;for(const ch of m[1].toUpperCase())col=col*26+(ch.charCodeAt(0)-64);return{row:Number(m[2])-1,col:col-1}}
