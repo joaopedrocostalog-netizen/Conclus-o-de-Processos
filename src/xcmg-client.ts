@@ -1,11 +1,8 @@
 import { XCMG_PROFILE } from './clients/xcmg';
-import { readXcmgSpreadsheet, type XcmgSpreadsheetSnapshot } from './clients/xcmg-spreadsheet';
+import { readXcmgSpreadsheet } from './clients/xcmg-spreadsheet';
+import { runXcmgAnalysis, type XcmgAnalysisSnapshot } from './clients/xcmg-analysis';
 
 export {};
-
-const XCMG_REPORT_FIELDS=Object.freeze([
-  'Cliente','Tipo Documento','Remetente / Exportador','Nº BL / AWB','Local de Armazenagem','Ref. do Cliente','Nº Documento','Destinatário / Importador','Operação Marítima','Agência Marítima','CNPJ do Cliente / Importador','Contêineres','Peso Líquido','Valor Total da Nota'
-] as const);
 
 const escapeHtml=(value:string)=>value.replace(/[&<>'"]/g,char=>({
   '&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'
@@ -88,10 +85,8 @@ function bindXcmg(){
   const analyzeButton=detail.querySelector<HTMLButtonElement>('.xcmg-analyze-button')!;
 
   const setCard=(input:HTMLInputElement)=>{
-    const upload=input.closest<HTMLElement>('.client-upload-card');
-    if(!upload)return;
-    const file=input.files?.[0]||null;
-    upload.classList.toggle('selected',Boolean(file));
+    const upload=input.closest<HTMLElement>('.client-upload-card');if(!upload)return;
+    const file=input.files?.[0]||null;upload.classList.toggle('selected',Boolean(file));
     const em=upload.querySelector<HTMLElement>('em');if(em)em.textContent=file?.name||'clique para selecionar';
     const clear=upload.querySelector<HTMLButtonElement>('.client-file-clear');if(clear)clear.hidden=!file;
   };
@@ -110,38 +105,24 @@ function bindXcmg(){
   sheetInput.addEventListener('change',refresh);
   nfInput.addEventListener('change',()=>{if(nfInput.files?.length)zipInput.value='';refresh()});
   zipInput.addEventListener('change',()=>{if(zipInput.files?.length)nfInput.value='';refresh()});
-
   detail.querySelectorAll<HTMLButtonElement>('[data-xcmg-clear]').forEach(button=>{
-    button.hidden=true;
-    button.addEventListener('click',event=>{
-      event.preventDefault();event.stopPropagation();
-      const input=detail.querySelector<HTMLInputElement>(`[data-xcmg-file="${button.dataset.xcmgClear}"]`);
-      if(input)input.value='';refresh();
-    });
+    button.hidden=true;button.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();const input=detail.querySelector<HTMLInputElement>(`[data-xcmg-file="${button.dataset.xcmgClear}"]`);if(input)input.value='';refresh()});
   });
 
   const hideOtherViews=()=>{
-    panel.querySelectorAll<HTMLElement>('.clients-list-view,.client-detail-view,.client-report-view').forEach(view=>{
-      view.classList.remove('active','leaving');view.setAttribute('aria-hidden','true');
-    });
+    panel.querySelectorAll<HTMLElement>('.clients-list-view,.client-detail-view,.client-report-view').forEach(view=>{view.classList.remove('active','leaving');view.setAttribute('aria-hidden','true')});
     panel.classList.remove('report-mode');
   };
   const showList=()=>{hideOtherViews();list.classList.add('active');list.setAttribute('aria-hidden','false')};
   const showDetail=()=>{hideOtherViews();detail.classList.add('active');detail.setAttribute('aria-hidden','false');detail.scrollTop=0;refresh()};
 
-  const showReport=(spreadsheet:XcmgSpreadsheetSnapshot,mode:'NF'|'ZIP',supportFile:File)=>{
-    const rows=XCMG_REPORT_FIELDS.map(label=>{
-      const isClient=label==='Cliente';
-      const value=isClient?'XCMG':'—';
-      const source=isClient?'Cliente selecionado':'Aguardando lógica exclusiva da XCMG';
-      const confidence=isClient?'Alta':'Pendente';
-      return `
-        <div class="client-report-row">
-          <div class="client-report-field"><b>${escapeHtml(label)}</b><span>${escapeHtml(source)}</span></div>
-          <div class="client-report-value">${escapeHtml(value)}</div>
-          <div class="client-report-confidence">${escapeHtml(confidence)}</div>
-        </div>`;
-    }).join('');
+  const showReport=(analysis:XcmgAnalysisSnapshot)=>{
+    const rows=analysis.fields.map(field=>`
+      <div class="client-report-row">
+        <div class="client-report-field"><b>${escapeHtml(field.label)}</b><span>${escapeHtml(field.source)}</span></div>
+        <div class="client-report-value">${escapeHtml(field.value)}</div>
+        <div class="client-report-confidence">${escapeHtml(field.confidence)}</div>
+      </div>`).join('');
 
     report.innerHTML=`
       <div class="client-report-toolbar">
@@ -150,67 +131,39 @@ function bindXcmg(){
       </div>
       <div class="client-report-head">
         <span class="client-report-logo"><img src="${XCMG_PROFILE.logo}" alt="Logo ${XCMG_PROFILE.displayName}"></span>
-        <div>
-          <span class="clients-kicker">Relatório por cliente</span>
-          <h2>Relatório XCMG</h2>
-          <p><b>Cliente do relatório: XCMG</b> · Campos definidos para a base exclusiva deste cliente.</p>
-        </div>
+        <div><span class="clients-kicker">Relatório por cliente</span><h2>Relatório XCMG</h2><p><b>Cliente do relatório: XCMG</b> · ${escapeHtml(analysis.summary)}</p></div>
       </div>
       <div class="client-report-metrics">
         <div><span>Cliente</span><b>XCMG</b></div>
-        <div><span>Entrada</span><b>Excel + ${mode}</b></div>
-        <div><span>Campos</span><b>1/${XCMG_REPORT_FIELDS.length}</b></div>
+        <div><span>Operação</span><b>${escapeHtml(analysis.processType)}</b></div>
+        <div><span>Campos</span><b>${analysis.found}/${analysis.total}</b></div>
       </div>
       <div class="client-report-table">${rows}</div>
       <button type="button" class="client-report-new xcmg-report-new">Nova análise XCMG</button>
     `;
-    hideOtherViews();
-    panel.classList.add('report-mode');
-    report.classList.add('active');
-    report.setAttribute('aria-hidden','false');
-    report.scrollTop=0;
-
+    hideOtherViews();panel.classList.add('report-mode');report.classList.add('active');report.setAttribute('aria-hidden','false');report.scrollTop=0;
     report.querySelector('.xcmg-report-back')?.addEventListener('click',showDetail);
-    report.querySelector('.xcmg-report-new')?.addEventListener('click',()=>{
-      sheetInput.value='';nfInput.value='';zipInput.value='';showDetail();
-    });
-    report.querySelector('.xcmg-report-copy')?.addEventListener('click',()=>{
-      const text=[
-        'Cliente do relatório: XCMG',
-        `Entrada: Excel + ${mode}`,
-        `Planilha: ${spreadsheet.filename}`,
-        `Documento complementar: ${supportFile.name}`,
-        '',
-        ...XCMG_REPORT_FIELDS.map(label=>`${label}: ${label==='Cliente'?'XCMG':'—'}`)
-      ].join('\n');
-      void navigator.clipboard?.writeText(text);
-    });
+    report.querySelector('.xcmg-report-new')?.addEventListener('click',()=>{sheetInput.value='';nfInput.value='';zipInput.value='';showDetail()});
+    report.querySelector('.xcmg-report-copy')?.addEventListener('click',()=>{const text=['Cliente do relatório: XCMG',`Operação: ${analysis.processType}`,'',...analysis.fields.map(f=>`${f.label}: ${f.value}\nFonte: ${f.source}`)].join('\n');void navigator.clipboard?.writeText(text)});
   };
 
   analyzeButton.addEventListener('click',async()=>{
     const sheet=sheetInput.files?.[0]||null,nf=nfInput.files?.[0]||null,zip=zipInput.files?.[0]||null;
     if(!sheet||!(nf||zip)){refresh();return;}
     try{
-      analyzeButton.disabled=true;
-      analyzeButton.textContent='Analisando processo XCMG...';
-      status.textContent='Lendo a planilha obrigatória da XCMG...';
+      analyzeButton.disabled=true;analyzeButton.textContent='Analisando processo XCMG...';status.textContent='Lendo e cruzando a planilha com os documentos da XCMG...';
       const spreadsheet=await readXcmgSpreadsheet(sheet);
-      if(zip)showReport(spreadsheet,'ZIP',zip);
-      else if(nf)showReport(spreadsheet,'NF',nf);
-    }catch(error){
-      status.textContent=error instanceof Error?`Não foi possível ler a planilha: ${error.message}`:'Não foi possível ler a planilha XCMG.';
-    }finally{
-      analyzeButton.textContent='Analisar processo XCMG';
-      refresh();
-    }
+      const analysis=await runXcmgAnalysis({spreadsheet,nf,zip});
+      showReport(analysis);
+    }catch(error){status.textContent=error instanceof Error?error.message:'Não foi possível concluir a análise XCMG.'}
+    finally{analyzeButton.textContent='Analisar processo XCMG';refresh()}
   });
 
   card.addEventListener('click',showDetail);
   detail.querySelector('.xcmg-back')?.addEventListener('click',showList);
   document.querySelector('.clients-tab')?.addEventListener('click',()=>{detail.classList.remove('active');report.classList.remove('active')});
   document.querySelector('.clients-back-tab')?.addEventListener('click',()=>{detail.classList.remove('active');report.classList.remove('active')});
-  refresh();
-  return true;
+  refresh();return true;
 }
 
 if(!bindXcmg()){
