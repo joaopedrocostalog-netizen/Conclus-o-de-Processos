@@ -3,6 +3,10 @@ import { readXcmgSpreadsheet, type XcmgSpreadsheetSnapshot } from './clients/xcm
 
 export {};
 
+const XCMG_REPORT_FIELDS=Object.freeze([
+  'Cliente','Tipo Documento','Remetente / Exportador','Nº BL / AWB','Local de Armazenagem','Ref. do Cliente','Nº Documento','Destinatário / Importador','Operação Marítima','Agência Marítima','CNPJ do Cliente / Importador','Contêineres','Peso Líquido','Valor Total da Nota'
+] as const);
+
 const escapeHtml=(value:string)=>value.replace(/[&<>'"]/g,char=>({
   '&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'
 }[char]||char));
@@ -126,6 +130,19 @@ function bindXcmg(){
   const showDetail=()=>{hideOtherViews();detail.classList.add('active');detail.setAttribute('aria-hidden','false');detail.scrollTop=0;refresh()};
 
   const showReport=(spreadsheet:XcmgSpreadsheetSnapshot,mode:'NF'|'ZIP',supportFile:File)=>{
+    const rows=XCMG_REPORT_FIELDS.map(label=>{
+      const isClient=label==='Cliente';
+      const value=isClient?'XCMG':'—';
+      const source=isClient?'Cliente selecionado':'Aguardando lógica exclusiva da XCMG';
+      const confidence=isClient?'Alta':'Pendente';
+      return `
+        <div class="client-report-row">
+          <div class="client-report-field"><b>${escapeHtml(label)}</b><span>${escapeHtml(source)}</span></div>
+          <div class="client-report-value">${escapeHtml(value)}</div>
+          <div class="client-report-confidence">${escapeHtml(confidence)}</div>
+        </div>`;
+    }).join('');
+
     report.innerHTML=`
       <div class="client-report-toolbar">
         <button type="button" class="client-report-back xcmg-report-back">← XCMG</button>
@@ -136,36 +153,15 @@ function bindXcmg(){
         <div>
           <span class="clients-kicker">Relatório por cliente</span>
           <h2>Relatório XCMG</h2>
-          <p><b>Cliente do relatório: XCMG</b> · Estrutura pronta para receber a lógica exclusiva deste cliente.</p>
+          <p><b>Cliente do relatório: XCMG</b> · Campos definidos para a base exclusiva deste cliente.</p>
         </div>
       </div>
       <div class="client-report-metrics">
         <div><span>Cliente</span><b>XCMG</b></div>
         <div><span>Entrada</span><b>Excel + ${mode}</b></div>
-        <div><span>Campos</span><b>0/0</b></div>
+        <div><span>Campos</span><b>1/${XCMG_REPORT_FIELDS.length}</b></div>
       </div>
-      <div class="client-report-table">
-        <div class="client-report-row">
-          <div class="client-report-field"><b>Planilha Excel</b><span>Arquivo obrigatório da XCMG</span></div>
-          <div class="client-report-value">${escapeHtml(spreadsheet.filename)}</div>
-          <div class="client-report-confidence">Lida</div>
-        </div>
-        <div class="client-report-row">
-          <div class="client-report-field"><b>Documento complementar</b><span>Modo selecionado</span></div>
-          <div class="client-report-value">${escapeHtml(supportFile.name)}</div>
-          <div class="client-report-confidence">${mode}</div>
-        </div>
-        <div class="client-report-row">
-          <div class="client-report-field"><b>Leitura da planilha</b><span>Conferência técnica do arquivo</span></div>
-          <div class="client-report-value">${spreadsheet.sheetNames.length} aba${spreadsheet.sheetNames.length===1?'':'s'} · ${spreadsheet.totalRows} linhas · ${spreadsheet.totalCells} células preenchidas</div>
-          <div class="client-report-confidence">OK</div>
-        </div>
-        <div class="client-report-row xcmg-report-placeholder-row">
-          <div class="client-report-field"><b>Campos do processo XCMG</b><span>Lógica própria ainda não configurada</span></div>
-          <div class="client-report-value">Os campos específicos serão adicionados somente com as regras da XCMG, sem reutilizar lógica de outros clientes.</div>
-          <div class="client-report-confidence">Pendente</div>
-        </div>
-      </div>
+      <div class="client-report-table">${rows}</div>
       <button type="button" class="client-report-new xcmg-report-new">Nova análise XCMG</button>
     `;
     hideOtherViews();
@@ -184,9 +180,8 @@ function bindXcmg(){
         `Entrada: Excel + ${mode}`,
         `Planilha: ${spreadsheet.filename}`,
         `Documento complementar: ${supportFile.name}`,
-        `Leitura da planilha: ${spreadsheet.sheetNames.length} abas, ${spreadsheet.totalRows} linhas, ${spreadsheet.totalCells} células preenchidas`,
         '',
-        'Campos específicos da XCMG ainda não configurados.'
+        ...XCMG_REPORT_FIELDS.map(label=>`${label}: ${label==='Cliente'?'XCMG':'—'}`)
       ].join('\n');
       void navigator.clipboard?.writeText(text);
     });
