@@ -22,8 +22,8 @@ async function pdfCandidates():Promise<PdfCandidate[]>{
   if(pdfCache)return pdfCache;
   pdfCache=(async()=>{
     const out:PdfCandidate[]=[];
-    const nf=document.querySelector<HTMLInputElement>('[data-xcmg-file="nf"]')?.files?.[0];
-    if(nf)out.push({filename:nf.name,bytes:await nf.arrayBuffer()});
+    const nfs=Array.from(document.querySelector<HTMLInputElement>('[data-xcmg-file="nf"]')?.files||[]);
+    for(const nf of nfs)out.push({filename:nf.name,bytes:await nf.arrayBuffer()});
     const zipFile=document.querySelector<HTMLInputElement>('[data-xcmg-file="zip"]')?.files?.[0];
     if(zipFile){
       const zip=await JSZip.loadAsync(await zipFile.arrayBuffer());
