@@ -32,6 +32,7 @@ import './client-session-history';
 import './client-capabilities';
 import './iguasport-client';
 import './xcmg-client';
+import './kemin-report-sources';
 import './kemin-client';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
