@@ -1,7 +1,6 @@
 import { XCMG_PROFILE } from './clients/xcmg';
 import { readXcmgSpreadsheet } from './clients/xcmg-spreadsheet';
 import { runXcmgAnalysis, type XcmgAnalysisSnapshot } from './clients/xcmg-analysis';
-import { findXcmgNetWeight } from './clients/xcmg-weight-fix';
 
 export {};
 
@@ -53,11 +52,11 @@ function bindXcmg(){
         <em>clique para selecionar</em>
       </label>
       <label class="client-upload-card xcmg-nf-card">
-        <input type="file" accept="application/pdf,.pdf" data-xcmg-file="nf" hidden>
+        <input type="file" accept="application/pdf,.pdf" data-xcmg-file="nf" multiple hidden>
         <button type="button" class="client-file-clear" data-xcmg-clear="nf" aria-label="Remover NF Fiscal">×</button>
         <span class="client-upload-icon">▤</span>
         <strong>NF FISCAL</strong>
-        <small>Use junto com a planilha</small>
+        <small>Use junto com a planilha · aceita várias NFs</small>
         <em>clique para selecionar</em>
       </label>
       <label class="client-upload-card xcmg-zip-card">
@@ -87,20 +86,21 @@ function bindXcmg(){
 
   const setCard=(input:HTMLInputElement)=>{
     const upload=input.closest<HTMLElement>('.client-upload-card');if(!upload)return;
-    const file=input.files?.[0]||null;upload.classList.toggle('selected',Boolean(file));
-    const em=upload.querySelector<HTMLElement>('em');if(em)em.textContent=file?.name||'clique para selecionar';
-    const clear=upload.querySelector<HTMLButtonElement>('.client-file-clear');if(clear)clear.hidden=!file;
+    const files=Array.from(input.files||[]);upload.classList.toggle('selected',files.length>0);
+    const em=upload.querySelector<HTMLElement>('em');
+    if(em)em.textContent=files.length===0?'clique para selecionar':files.length===1?files[0].name:`${files.length} arquivos selecionados`;
+    const clear=upload.querySelector<HTMLButtonElement>('.client-file-clear');if(clear)clear.hidden=files.length===0;
   };
 
   const refresh=()=>{
-    const sheet=sheetInput.files?.[0]||null,nf=nfInput.files?.[0]||null,zip=zipInput.files?.[0]||null;
+    const sheet=sheetInput.files?.[0]||null,nfs=Array.from(nfInput.files||[]),zip=zipInput.files?.[0]||null;
     setCard(sheetInput);setCard(nfInput);setCard(zipInput);
-    if(!sheet&&!(nf||zip))status.textContent='Envie a planilha obrigatória e depois selecione NF ou ZIP.';
+    if(!sheet&&!(nfs.length||zip))status.textContent='Envie a planilha obrigatória e depois selecione NF ou ZIP.';
     else if(!sheet)status.textContent='Falta a planilha Excel obrigatória para liberar a análise.';
-    else if(!(nf||zip))status.textContent=`Planilha selecionada: ${sheet.name}. Agora selecione NF ou ZIP.`;
+    else if(!(nfs.length||zip))status.textContent=`Planilha selecionada: ${sheet.name}. Agora selecione uma ou mais NFs ou ZIP.`;
     else if(zip)status.textContent=`Pronto: planilha ${sheet.name} + ZIP ${zip.name}.`;
-    else status.textContent=`Pronto: planilha ${sheet.name} + NF ${nf?.name}.`;
-    analyzeButton.disabled=!(sheet&&(nf||zip));
+    else status.textContent=nfs.length===1?`Pronto: planilha ${sheet.name} + NF ${nfs[0].name}.`:`Pronto: planilha ${sheet.name} + ${nfs.length} NFs.`;
+    analyzeButton.disabled=!(sheet&&(nfs.length||zip));
   };
 
   sheetInput.addEventListener('change',refresh);
@@ -149,19 +149,12 @@ function bindXcmg(){
   };
 
   analyzeButton.addEventListener('click',async()=>{
-    const sheet=sheetInput.files?.[0]||null,nf=nfInput.files?.[0]||null,zip=zipInput.files?.[0]||null;
-    if(!sheet||!(nf||zip)){refresh();return;}
+    const sheet=sheetInput.files?.[0]||null,nfs=Array.from(nfInput.files||[]),zip=zipInput.files?.[0]||null;
+    if(!sheet||!(nfs.length||zip)){refresh();return;}
     try{
       analyzeButton.disabled=true;analyzeButton.textContent='Analisando processo XCMG...';status.textContent='Lendo e cruzando a planilha com os documentos da XCMG...';
       const spreadsheet=await readXcmgSpreadsheet(sheet);
-      const analysis=await runXcmgAnalysis({spreadsheet,nf,zip});
-      const weight=await findXcmgNetWeight(nf,zip);
-      if(weight){
-        const field=analysis.fields.find(item=>item.label==='Peso Líquido');
-        if(field){field.value=weight.value;field.source=weight.source;field.confidence='Alta'}
-        analysis.found=analysis.fields.filter(item=>item.value!=='—').length;
-        analysis.summary=`${analysis.found}/${analysis.total} campos localizados nos arquivos enviados`;
-      }
+      const analysis=await runXcmgAnalysis({spreadsheet,nfs,zip});
       showReport(analysis);
     }catch(error){status.textContent=error instanceof Error?error.message:'Não foi possível concluir a análise XCMG.'}
     finally{analyzeButton.textContent='Analisar processo XCMG';refresh()}
