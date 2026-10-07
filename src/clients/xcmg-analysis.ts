@@ -37,13 +37,18 @@ async function readPdf(data:ArrayBuffer|Uint8Array,filename:string):Promise<PdfP
   }
   return pages;
 }
-async function readSupport(nf:File|null,zip:File|null){
-  if(nf)return readPdf(await nf.arrayBuffer(),nf.name);
-  if(!zip)throw new Error('Envie uma NF em PDF ou um ZIP para a XCMG.');
+async function readSupport(nfs:File[],zip:File|null){
+  const out:PdfPage[]=[];
+  if(nfs.length){
+    for(const nf of nfs)out.push(...await readPdf(await nf.arrayBuffer(),nf.name));
+    return out;
+  }
+  if(!zip)throw new Error('Envie uma ou mais NFs em PDF ou um ZIP para a XCMG.');
   const archive=await JSZip.loadAsync(await zip.arrayBuffer());
   const entries=Object.values(archive.files).filter(entry=>!entry.dir&&entry.name.toLowerCase().endsWith('.pdf'));
   if(!entries.length)throw new Error('Nenhum PDF foi encontrado dentro do ZIP da XCMG.');
-  const out:PdfPage[]=[];for(const entry of entries)out.push(...await readPdf(await entry.async('uint8array'),entry.name));return out;
+  for(const entry of entries)out.push(...await readPdf(await entry.async('uint8array'),entry.name));
+  return out;
 }
 function nfePages(pages:PdfPage[]){return pages.filter(p=>/\bDANFE\b|NOTA FISCAL ELETR[OÔ]NICA|VALOR TOTAL DA NOTA|CHAVE DE ACESSO/i.test(`${p.text} ${p.flatText}`))}
 function firstNfe(pages:PdfPage[]){return nfePages(pages)[0]||pages[0]}
@@ -98,25 +103,54 @@ function importerCnpj(pages:PdfPage[]):Pick{
   }
   return empty('CNPJ do Cliente / Importador não localizado no cabeçalho superior direito da NF.');
 }
+function parsePtBrNumber(value:string){const parsed=Number(value.replace(/\./g,'').replace(',','.'));return Number.isFinite(parsed)?parsed:null}
+function formatPtBr(value:number,decimals:number){return new Intl.NumberFormat('pt-BR',{minimumFractionDigits:decimals,maximumFractionDigits:decimals,useGrouping:true}).format(value)}
+function pagesByFile(pages:PdfPage[]){const map=new Map<string,PdfPage[]>();for(const page of nfePages(pages)){const current=map.get(page.filename)||[];current.push(page);map.set(page.filename,current)}return map}
 function netWeight(pages:PdfPage[]):Pick{
-  for(const p of nfePages(pages)){
-    const rows=companyRows(p);const marker=rows.findIndex(row=>/PESO\s+BRUTO.*PESO\s+L[IÍ]QUIDO/i.test(row)||/PESO\s+L[IÍ]QUIDO/i.test(row));
-    if(marker<0)continue;
-    for(const row of rows.slice(marker+1,marker+7)){
-      const nums=[...row.matchAll(/\b\d{1,3}(?:\.\d{3})*,\d{3}\b/g)].map(m=>m[0]);
-      if(nums.length)return{value:nums[nums.length-1],source:pdfSource(p,'PESO LÍQUIDO'),confidence:'Alta'};
+  const found:Array<{value:number;display:string;page:PdfPage}>=[];
+  for(const [,filePages] of pagesByFile(pages)){
+    let fileHit:{value:number;display:string;page:PdfPage}|null=null;
+    for(const p of filePages){
+      const rows=companyRows(p);const marker=rows.findIndex(row=>/PESO\s+BRUTO.*PESO\s+L[IÍ]QUIDO/i.test(row)||/PESO\s+L[IÍ]QUIDO/i.test(row));
+      if(marker<0)continue;
+      for(const row of rows.slice(marker+1,marker+7)){
+        const nums=[...row.matchAll(/\b\d{1,9}(?:\.\d{3})*,\d{3}\b/g)].map(m=>m[0]);
+        if(!nums.length)continue;
+        const display=nums[nums.length-1],value=parsePtBrNumber(display);
+        if(value!==null){fileHit={value,display,page:p};break}
+      }
+      if(fileHit)break;
     }
+    if(fileHit)found.push(fileHit);
   }
-  return empty('Peso Líquido não localizado na NF.');
+  if(!found.length)return empty('Peso Líquido não localizado nas NFs.');
+  const total=found.reduce((sum,item)=>sum+item.value,0);
+  const source=found.length===1
+    ?pdfSource(found[0].page,'PESO LÍQUIDO')
+    :`Soma de ${found.length} NFs · ${found.map(item=>`${item.page.filename} · página ${item.page.page} · ${item.display}`).join(' + ')}`;
+  return{value:formatPtBr(total,3),source,confidence:'Alta'};
 }
 function noteValue(pages:PdfPage[]):Pick{
-  for(const p of nfePages(pages)){
-    const rows=companyRows(p);const marker=rows.findIndex(row=>/VALOR\s+TOTAL\s+DA\s+NOTA/i.test(row));if(marker<0)continue;
-    const candidates:string[]=[];
-    for(const row of rows.slice(marker,marker+6))for(const m of row.matchAll(/\b\d{1,3}(?:\.\d{3})*,\d{2}\b/g))candidates.push(m[0]);
-    if(candidates.length){const score=(s:string)=>Number(s.replace(/\./g,'').replace(',','.'));const value=[...candidates].sort((a,b)=>score(b)-score(a))[0];return{value,source:pdfSource(p,'VALOR TOTAL DA NOTA'),confidence:'Alta'}}
+  const found:Array<{value:number;display:string;page:PdfPage}>=[];
+  for(const [,filePages] of pagesByFile(pages)){
+    let fileHit:{value:number;display:string;page:PdfPage}|null=null;
+    for(const p of filePages){
+      const rows=companyRows(p);const marker=rows.findIndex(row=>/VALOR\s+TOTAL\s+DA\s+NOTA/i.test(row));if(marker<0)continue;
+      const candidates:string[]=[];
+      for(const row of rows.slice(marker,marker+6))for(const m of row.matchAll(/\b\d{1,3}(?:\.\d{3})*,\d{2}\b/g))candidates.push(m[0]);
+      if(candidates.length){
+        const ranked=candidates.map(display=>({display,value:parsePtBrNumber(display)})).filter((item):item is {display:string;value:number}=>item.value!==null).sort((x,y)=>y.value-x.value);
+        if(ranked.length){fileHit={...ranked[0],page:p};break}
+      }
+    }
+    if(fileHit)found.push(fileHit);
   }
-  return empty('Valor Total da Nota não localizado na NF.');
+  if(!found.length)return empty('Valor Total da Nota não localizado nas NFs.');
+  const total=found.reduce((sum,item)=>sum+item.value,0);
+  const source=found.length===1
+    ?pdfSource(found[0].page,'VALOR TOTAL DA NOTA')
+    :`Soma de ${found.length} NFs · ${found.map(item=>`${item.page.filename} · página ${item.page.page} · R$ ${item.display}`).join(' + ')}`;
+  return{value:formatPtBr(total,2),source,confidence:'Alta'};
 }
 function blNumber(sheet:XcmgSpreadsheetSnapshot):Pick{
   for(const sh of sheet.sheets)for(let r=0;r<sh.rows.length;r++){
@@ -130,22 +164,32 @@ function blNumber(sheet:XcmgSpreadsheetSnapshot):Pick{
   return empty('Nº BL / AWB não localizado na planilha.');
 }
 function containers(sheet:XcmgSpreadsheetSnapshot):Pick{
-  for(const sh of sheet.sheets)for(let r=0;r<sh.rows.length;r++){
-    const row=sh.rows[r];for(let c=0;c<row.length;c++){
-      if(!/CONTAINER\s*(?:NO\.?|N[º°O]?)/i.test(row[c]||''))continue;
-      const values:Array<{value:string;ref:string}>=[];
-      for(let rr=r+1;rr<Math.min(sh.rows.length,r+35);rr++){
-        const raw=String(sh.rows[rr]?.[c]||'').trim();const m=raw.match(/\b[A-Z]{4}\d{7}\b/);if(m)values.push({value:m[0],ref:cellRef(rr,c)});
+  const values:Array<{value:string;sheet:string;ref:string}>=[];
+  for(const sh of sheet.sheets){
+    for(let r=0;r<sh.rows.length;r++){
+      for(let c=0;c<sh.rows[r].length;c++){
+        const raw=String(sh.rows[r]?.[c]||'').toUpperCase();
+        for(const match of raw.matchAll(/\b[A-Z]{4}\d{7}\b/g)){
+          values.push({value:match[0],sheet:sh.name,ref:cellRef(r,c)});
+        }
       }
-      if(values.length){const unique=[...new Map(values.map(v=>[v.value,v])).values()];return{value:unique.map(v=>v.value).join(', '),source:sheetSource(sheet.filename,sh.name,unique.map(v=>v.ref).join(', '),'coluna de contêineres'),confidence:'Alta'}}
     }
   }
-  return empty('Contêineres não localizados na planilha.');
+  if(!values.length)return empty('Contêineres não localizados na planilha.');
+  const unique=[...new Map(values.map(item=>[item.value,item])).values()];
+  const refsBySheet=new Map<string,string[]>();
+  for(const item of unique){const refs=refsBySheet.get(item.sheet)||[];refs.push(item.ref);refsBySheet.set(item.sheet,refs)}
+  const sourceParts=[...refsBySheet.entries()].map(([sheet,refs])=>`aba ${sheet} · ${refs.join(', ')}`);
+  return{
+    value:unique.map(item=>item.value).join(', '),
+    source:`Excel · ${sheet.filename} · ${sourceParts.join(' · ')} · todos os contêineres identificados`,
+    confidence:'Alta'
+  };
 }
 function toField(label:XcmgReportFieldLabel,pick:Pick):XcmgAnalysisField{return{label,value:pick.value||'—',source:pick.source,confidence:pick.confidence}}
 
-export async function runXcmgAnalysis(args:{spreadsheet:XcmgSpreadsheetSnapshot;nf:File|null;zip:File|null}):Promise<XcmgAnalysisSnapshot>{
-  const pages=await readSupport(args.nf,args.zip);const client=clientName(pages);
+export async function runXcmgAnalysis(args:{spreadsheet:XcmgSpreadsheetSnapshot;nfs:File[];zip:File|null}):Promise<XcmgAnalysisSnapshot>{
+  const pages=await readSupport(args.nfs,args.zip);const client=clientName(pages);
   const picks:Record<XcmgReportFieldLabel,Pick>={
     'Cliente':client,
     'Tipo Documento':{value:'DUIMP',source:'Regra exclusiva XCMG · tipo de documento definido para este cliente',confidence:'Alta'},
