@@ -170,7 +170,7 @@ async function directedVesselBox(canvas:HTMLCanvasElement,value:string):Promise<
     collectOcrVisualLines(result?.data,visual);
     const anchors=visual.filter(line=>/VESSELVOYAGE/.test(norm(line.text)));
     const values=visual.filter(line=>norm(line.text).includes(norm(value)));
-    let target=values[0];
+    let target:OcrVisualLine|undefined=values[0];
     if(!target&&anchors.length){
       const anchor=anchors[0];
       target=nearestBelow(anchor,visual,150).find(line=>!/PLACE\s+OF|PORT\s+OF|BILL\s+OF\s+LADING|ORIGINAL/i.test(line.text));
