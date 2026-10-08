@@ -225,10 +225,18 @@ async function ocrBox(canvas:HTMLCanvasElement,value:string,label:string,note:st
 }
 
 function exactNoteTotalSelection(items:PdfTextItem[],value:string,viewport:any,scale:number){
+  const phrase='VALORTOTALDANOTA';
   const ls=lines(items);
-  const anchorLine=ls.find(line=>line.normalized.includes('VALORTOTALDANOTA'));
+  const anchorLine=ls.find(line=>line.normalized.includes(phrase));
   if(!anchorLine)return null;
-  const anchorBox=merge(anchorLine.items.map(item=>itemBox(item,viewport,scale)));
+
+  // Prefer the exact PDF text block for the label instead of merging the whole tax row.
+  let anchorItems=anchorLine.items.filter(item=>norm(txt(item)).includes(phrase));
+  if(!anchorItems.length){
+    const phraseTokens=new Set(['VALOR','TOTAL','DA','NOTA']);
+    anchorItems=anchorLine.items.filter(item=>phraseTokens.has(norm(txt(item))));
+  }
+  const anchorBox=merge((anchorItems.length?anchorItems:anchorLine.items).map(item=>itemBox(item,viewport,scale)));
   if(!anchorBox)return null;
 
   const candidates=items
@@ -236,15 +244,20 @@ function exactNoteTotalSelection(items:PdfTextItem[],value:string,viewport:any,s
     .map(item=>({item,box:itemBox(item,viewport,scale)}));
   if(!candidates.length)return null;
 
-  const ax=anchorBox.x+anchorBox.w/2,ay=anchorBox.y+anchorBox.h;
-  const ranked=candidates.map(candidate=>{
-    const cx=candidate.box.x+candidate.box.w/2,cy=candidate.box.y;
-    const horizontal=Math.abs(cx-ax);
-    const vertical=Math.abs(cy-ay);
-    const overlap=Math.max(0,Math.min(anchorBox.x+anchorBox.w,candidate.box.x+candidate.box.w)-Math.max(anchorBox.x,candidate.box.x));
-    const belowPenalty=cy<anchorBox.y-8?1200:0;
-    const columnPenalty=overlap>0?0:horizontal*2.5;
-    return{...candidate,score:vertical*2+horizontal+columnPenalty+belowPenalty};
+  const anchorCenterX=anchorBox.x+anchorBox.w/2;
+  const strict=candidates.filter(candidate=>{
+    const centerX=candidate.box.x+candidate.box.w/2;
+    const verticalGap=candidate.box.y-(anchorBox.y+anchorBox.h);
+    const sameColumn=centerX>=anchorBox.x-35&&centerX<=anchorBox.x+anchorBox.w+35;
+    return verticalGap>=-10&&verticalGap<=85&&sameColumn;
+  });
+
+  const pool=strict.length?strict:candidates;
+  const ranked=pool.map(candidate=>{
+    const centerX=candidate.box.x+candidate.box.w/2;
+    const verticalGap=Math.abs(candidate.box.y-(anchorBox.y+anchorBox.h));
+    const horizontalGap=Math.abs(centerX-anchorCenterX);
+    return{...candidate,score:verticalGap*6+horizontalGap};
   }).sort((a,b)=>a.score-b.score);
 
   return{target:ranked[0].box,context:[anchorBox,ranked[0].box]};
