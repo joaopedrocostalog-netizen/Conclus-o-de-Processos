@@ -62,7 +62,7 @@ async function ocrPage(page:any){
   const canvas=document.createElement('canvas');canvas.width=Math.ceil(viewport.width);canvas.height=Math.ceil(viewport.height);
   const ctx=canvas.getContext('2d');if(!ctx)return{rows:[] as string[],text:'',lines:[] as OcrLine[]};
   await page.render({canvas,canvasContext:ctx,viewport}).promise;
-  const worker=await getOcrWorker(),result=await worker.recognize(canvas),text=clean(String(result?.data?.text||'')),ocrLines:OcrLine[]=[];
+  const worker=await getOcrWorker(),result=await worker.recognize(canvas,{}, {text:true,blocks:true}),text=clean(String(result?.data?.text||'')),ocrLines:OcrLine[]=[];
   collectOcrLines(result?.data,ocrLines);
   const rows=ocrLines.length?ocrLines.sort((a,b)=>a.y0-b.y0||a.x0-b.x0).map(line=>line.text):text.split(/\r?\n/).map((row:string)=>clean(row)).filter(Boolean);
   return{rows,text,lines:ocrLines};
@@ -100,6 +100,18 @@ function capture(text:string,pattern:RegExp){const m=text.match(pattern);return 
 function stripTrailingDate(value:string){return value.replace(/\s+\d{2}\/\d{2}\/\d{4}(?:\s+\d{2}:\d{2}(?::\d{2})?)?\s*$/,'').trim()}
 function parsePtBrNumber(value:string){const n=Number(value.replace(/\./g,'').replace(',','.'));return Number.isFinite(n)?n:null}
 function formatPtBr(value:number,decimals:number){return new Intl.NumberFormat('pt-BR',{minimumFractionDigits:decimals,maximumFractionDigits:decimals,useGrouping:true}).format(value)}
+function validBlNumber(value:string){
+  const v=value.trim().toUpperCase();
+  if(v.length<6||v.length>30||!/\d/.test(v)||!/^[A-Z0-9-]+$/.test(v))return false;
+  if(/^(PLACE|PORT|VESSEL|VOYAGE|BILL|LADING|NUMBER|NO|ORIGINAL|DESTINATION)$/.test(v))return false;
+  return true;
+}
+function validVessel(value:string){
+  const v=value.trim();
+  if(v.length<4||!/[A-ZÀ-Ü]{3}/i.test(v))return false;
+  if(/PLACE\s+OF|PORT\s+OF|BILL\s+OF\s+LADING|CONSIGNEE|SHIPPER|ORIGINAL/i.test(v))return false;
+  return true;
+}
 
 function clientName(pages:PdfPage[]):Pick{
   for(const p of duimpPages(pages)){
@@ -146,11 +158,12 @@ function ocrBlNumber(p:PdfPage){
   const anchors=p.ocrLines.filter(line=>/BILLOFLADING(?:NO|NUMBER)/.test(lineNorm(line)));
   for(const anchor of anchors){
     const inline=anchor.text.match(/(?:BILL\s*OF\s*LADING\s*(?:NO\.?|NUMBER))\s*[:#-]?\s*([A-Z0-9-]{5,30})/i);
-    if(inline?.[1])return inline[1];
+    if(inline?.[1]&&validBlNumber(inline[1]))return inline[1];
     for(const line of belowAnchor(p.ocrLines,anchor,100)){
       if(line===anchor)continue;
-      const match=line.text.match(/\b([A-Z]{2,}[A-Z0-9-]*\d[A-Z0-9-]*)\b/i);
-      if(match?.[1])return match[1];
+      for(const match of line.text.matchAll(/\b([A-Z0-9-]{6,30})\b/gi)){
+        if(validBlNumber(match[1]))return match[1];
+      }
     }
   }
   return null;
@@ -159,12 +172,14 @@ function ocrVessel(p:PdfPage){
   const anchors=p.ocrLines.filter(line=>/VESSELVOYAGE/.test(lineNorm(line)));
   for(const anchor of anchors){
     const inline=anchor.text.replace(/^.*?VESSEL\s*\/\s*VOYAGE\s*[:#-]?\s*/i,'').trim();
-    if(inline&&lineNorm({text:inline,x0:0,y0:0,x1:0,y1:0}).length>3&&!/VESSELVOYAGE/.test(norm(inline).replace(/[^A-Z0-9]/g,'')))return inline.split(/\s*\/\s*/)[0].trim();
+    if(inline&&lineNorm({text:inline,x0:0,y0:0,x1:0,y1:0}).length>3&&!/VESSELVOYAGE/.test(norm(inline).replace(/[^A-Z0-9]/g,''))){
+      const value=inline.split(/\s*\/\s*/)[0].trim();
+      if(validVessel(value))return value;
+    }
     for(const line of belowAnchor(p.ocrLines,anchor,120)){
       if(line===anchor)continue;
-      if(/PORT\s+OF|PLACE\s+OF/i.test(line.text))continue;
       const value=line.text.split(/\s*\/\s*/)[0].trim();
-      if(value.length>=4)return value;
+      if(validVessel(value))return value;
     }
   }
   return null;
@@ -185,10 +200,15 @@ function blNumber(pages:PdfPage[]):Pick{
     for(let i=0;i<rs.length;i++){
       if(!/BILL\s*OF\s*LADING\s*(?:NO\.?|NUMBER)/i.test(rs[i]))continue;
       const same=rs[i].match(/(?:NO\.?|NUMBER)\s*[:#\-]?\s*([A-Z0-9-]{5,30})/i);
-      if(same?.[1])return{value:same[1],source:pdfSource(p,'BILL OF LADING NO.'),confidence:'Alta'};
+      if(same?.[1]&&validBlNumber(same[1]))return{value:same[1],source:pdfSource(p,'BILL OF LADING NO.'),confidence:'Alta'};
       const next=rs[i+1]?.match(/^\s*([A-Z0-9-]{5,30})\s*$/i);
-      if(next?.[1])return{value:next[1],source:pdfSource(p,'BILL OF LADING NO.'),confidence:'Alta'};
+      if(next?.[1]&&validBlNumber(next[1]))return{value:next[1],source:pdfSource(p,'BILL OF LADING NO.'),confidence:'Alta'};
     }
+  }
+  for(const p of pages.filter(isBl)){
+    const candidates=[...all(p).matchAll(/\b([A-Z]{2,}[A-Z0-9-]*\d[A-Z0-9-]{4,})\b/g)].map(m=>m[1]).filter(validBlNumber);
+    const likely=candidates.find(value=>!/^HKX/i.test(value)&&!/^[A-Z]{4}\d{7}$/.test(value));
+    if(likely)return{value:likely,source:pdfSource(p,'código identificado no bloco BILL OF LADING'),confidence:'Média'};
   }
   return empty('Nº BL / AWB não localizado no BL.');
 }
@@ -240,20 +260,26 @@ function operation(pages:PdfPage[]):Pick{
 function shippingAgency(pages:PdfPage[]):Pick{
   for(const p of pages.filter(isBl)){
     const spatial=ocrVessel(p);
-    if(spatial)return{value:spatial,source:pdfSource(p,'VESSEL / VOYAGE · navio · leitura espacial do BL'),confidence:'Alta'};
+    if(spatial&&validVessel(spatial))return{value:spatial,source:pdfSource(p,'VESSEL / VOYAGE · navio · leitura espacial do BL'),confidence:'Alta'};
     const text=all(p);
     const vesselVoyage=capture(text,/VESSEL\s*\/\s*VOYAGE\s*[:\-]?\s*(.+?)(?=\s+(?:PORT\s+OF\s+LOADING|PORT\s+OF\s+DISCHARGE|PLACE\s+OF\s+DELIVERY|$))/i);
     if(vesselVoyage){
       const vessel=vesselVoyage.split(/\s*\/\s*/)[0]?.trim();
-      if(vessel)return{value:vessel,source:pdfSource(p,'VESSEL / VOYAGE · navio'),confidence:'Alta'};
+      if(vessel&&validVessel(vessel))return{value:vessel,source:pdfSource(p,'VESSEL / VOYAGE · navio'),confidence:'Alta'};
     }
     const rs=rows(p);
     for(let i=0;i<rs.length;i++){
       if(!/VESSEL\s*\/\s*VOYAGE/i.test(rs[i]))continue;
       const inline=rs[i].replace(/^.*?VESSEL\s*\/\s*VOYAGE\s*[:\-]?\s*/i,'').trim();
       const candidate=(inline||rs[i+1]||'').split(/\s*\/\s*/)[0].trim();
-      if(candidate&&!/PORT\s+OF/i.test(candidate))return{value:candidate,source:pdfSource(p,'VESSEL / VOYAGE · navio'),confidence:'Alta'};
+      if(validVessel(candidate))return{value:candidate,source:pdfSource(p,'VESSEL / VOYAGE · navio'),confidence:'Alta'};
     }
+  }
+  for(const p of duimpPages(pages)){
+    const text=all(p);
+    const m=text.match(/NAVIO\s+DE\s+EMBARQUE\s*:\s*([^|=\n]+?)(?=\s+(?:NAVIO\s+DE\s+CHEGADA|CONTAINERS?|VALOR\s+EM\s+MOEDA|$))/i);
+    const candidate=m?.[1]?.trim();
+    if(candidate&&validVessel(candidate))return{value:candidate,source:pdfSource(p,'NAVIO DE EMBARQUE · fallback do Extrato DUIMP'),confidence:'Média'};
   }
   return empty('Navio não localizado no campo VESSEL / VOYAGE do BL.');
 }
