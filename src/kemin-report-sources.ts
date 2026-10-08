@@ -163,19 +163,21 @@ function nearestBelow(anchor:OcrVisualLine,lines:OcrVisualLine[],maxGap=150){
 }
 async function ocrBox(canvas:HTMLCanvasElement,value:string,label:string,note:string):Promise<{target:Box|null;context:Box[]}>{
   try{
-    const worker=await getOcrWorker(),result=await worker.recognize(canvas),visual:OcrVisualLine[]=[];
+    const worker=await getOcrWorker(),result=await worker.recognize(canvas,{}, {text:true,blocks:true}),visual:OcrVisualLine[]=[];
     collectOcrVisualLines(result?.data,visual);
     const anchors=visualAnchors(visual,label,note),values=visualValueMatches(visual,value,label);
 
     if(/Nº BL|AWB/i.test(label)&&anchors.length){
       const anchor=anchors.find(line=>/BILLOFLADING(?:NO|NUMBER)/.test(norm(line.text)))||anchors[0];
-      const target=nearestBelow(anchor,visual,120).find(line=>norm(line.text).includes(norm(value)))||values.find(line=>overlapX(anchor.box,line.box)>0);
+      const below=nearestBelow(anchor,visual,120).filter(line=>/\d/.test(line.text)&&!/PLACE|PORT|VESSEL|VOYAGE|BILL|LADING|ORIGINAL/i.test(line.text));
+      const target=below.find(line=>norm(line.text).includes(norm(value)))||values.find(line=>overlapX(anchor.box,line.box)>0&&/\d/.test(line.text));
       if(target)return{target:target.box,context:[anchor.box,target.box]};
     }
 
     if(/Agência Marítima/i.test(label)&&anchors.length){
       const anchor=anchors.find(line=>/VESSELVOYAGE/.test(norm(line.text)))||anchors[0];
-      const target=nearestBelow(anchor,visual,150).find(line=>norm(line.text).includes(norm(value)))||values.find(line=>overlapX(anchor.box,line.box)>0);
+      const below=nearestBelow(anchor,visual,150).filter(line=>!/PLACE\s+OF|PORT\s+OF|BILL\s+OF\s+LADING|ORIGINAL/i.test(line.text));
+      const target=below.find(line=>norm(line.text).includes(norm(value)))||values.find(line=>overlapX(anchor.box,line.box)>0);
       if(target)return{target:target.box,context:[anchor.box,target.box]};
     }
 
