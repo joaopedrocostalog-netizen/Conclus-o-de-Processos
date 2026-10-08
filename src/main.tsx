@@ -36,6 +36,7 @@ import './iguasport-client';
 import './xcmg-client';
 import './kemin-report-sources';
 import './kemin-client';
+import './ceva-report-sources';
 import './ceva-client';
 import './ui-performance';
 
