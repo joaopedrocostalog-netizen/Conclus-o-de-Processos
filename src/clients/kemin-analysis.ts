@@ -58,30 +58,36 @@ function collectOcrLines(node:any,out:OcrLine[]){
   for(const key of ['blocks','paragraphs'])if(Array.isArray(node[key]))for(const child of node[key])collectOcrLines(child,out);
 }
 function vesselFromText(text:string){
-  const normalized=clean(text);
-  const direct=normalized.match(/VESSEL\s*\/\s*VOYAGE\s*[:#-]?\s*([^\n\r]+)/i)?.[1]?.trim();
-  if(direct){
-    const value=direct.split(/\s*\/\s*/)[0].trim();
-    if(validVessel(value))return value;
-  }
-  const ls=normalized.split(/\r?\n/).map(line=>clean(line)).filter(Boolean);
-  const index=ls.findIndex(line=>/VESSEL\s*\/\s*VOYAGE/i.test(line));
-  if(index>=0){
-    const inline=ls[index].replace(/^.*?VESSEL\s*\/\s*VOYAGE\s*[:#-]?\s*/i,'').trim();
-    const candidates=[inline,ls[index+1]||'',ls[index+2]||''];
+  const raw=String(text||'');
+  const ls=raw.split(/\r?\n/).map(line=>clean(line)).filter(Boolean);
+  for(let i=0;i<ls.length;i++){
+    if(!/VESSEL\s*[/|\\-]?\s*VOYAGE/i.test(ls[i]))continue;
+    const inline=ls[i].replace(/^.*?VESSEL\s*[/|\\-]?\s*VOYAGE\s*[:#-]?\s*/i,'').trim();
+    const candidates=[inline,ls[i+1]||'',ls[i+2]||''];
     for(const candidate of candidates){
-      const value=candidate.split(/\s*\/\s*/)[0].trim();
+      const value=candidate
+        .replace(/^(?:VESSEL|VOYAGE)\s*[:#-]?\s*/i,'')
+        .split(/\s*[/|] *\s*/)[0]
+        .trim();
       if(validVessel(value))return value;
     }
+  }
+  const flat=clean(raw);
+  const direct=flat.match(/VESSEL\s*[/|\\-]?\s*VOYAGE\s*[:#-]?\s*([A-Z][A-Z0-9 .&'()-]{3,80}?)(?=\s+(?:PORT\s+OF|PLACE\s+OF|FINAL\s+DESTINATION|MARKS\s*&\s*NUMBERS|$))/i)?.[1]?.trim();
+  if(direct){
+    const value=direct.split(/\s*[/|]\s*/)[0].trim();
+    if(validVessel(value))return value;
   }
   return null;
 }
 async function ocrVesselRegion(canvas:HTMLCanvasElement){
   try{
-    const sx=0,sy=Math.floor(canvas.height*0.25),sw=Math.floor(canvas.width*0.58),sh=Math.floor(canvas.height*0.34);
+    const sx=0,sy=Math.floor(canvas.height*0.22),sw=Math.floor(canvas.width*0.62),sh=Math.floor(canvas.height*0.42);
     const crop=document.createElement('canvas');crop.width=Math.max(1,sw);crop.height=Math.max(1,sh);
     crop.getContext('2d')?.drawImage(canvas,sx,sy,sw,sh,0,0,sw,sh);
-    const worker=await getOcrWorker(),result=await worker.recognize(crop,{}, {text:true});
+    const worker=await getOcrWorker();
+    try{await worker.setParameters({tessedit_pageseg_mode:'6' as any})}catch{}
+    const result=await worker.recognize(crop,{}, {text:true});
     return vesselFromText(String(result?.data?.text||''));
   }catch{return null}
 }
@@ -292,25 +298,19 @@ function shippingAgency(pages:PdfPage[]):Pick{
     if(p.vesselHint&&validVessel(p.vesselHint))return{value:p.vesselHint,source:pdfSource(p,'VESSEL / VOYAGE · navio · OCR direcionado'),confidence:'Alta'};
     const spatial=ocrVessel(p);
     if(spatial&&validVessel(spatial))return{value:spatial,source:pdfSource(p,'VESSEL / VOYAGE · navio · leitura espacial do BL'),confidence:'Alta'};
-    const text=all(p);
-    const vesselVoyage=capture(text,/VESSEL\s*\/\s*VOYAGE\s*[:\-]?\s*(.+?)(?=\s+(?:PORT\s+OF\s+LOADING|PORT\s+OF\s+DISCHARGE|PLACE\s+OF\s+DELIVERY|$))/i);
-    if(vesselVoyage){
-      const vessel=vesselVoyage.split(/\s*\/\s*/)[0]?.trim();
-      if(vessel&&validVessel(vessel))return{value:vessel,source:pdfSource(p,'VESSEL / VOYAGE · navio'),confidence:'Alta'};
-    }
-    const rs=rows(p);
-    for(let i=0;i<rs.length;i++){
-      if(!/VESSEL\s*\/\s*VOYAGE/i.test(rs[i]))continue;
-      const inline=rs[i].replace(/^.*?VESSEL\s*\/\s*VOYAGE\s*[:\-]?\s*/i,'').trim();
-      const candidate=(inline||rs[i+1]||'').split(/\s*\/\s*/)[0].trim();
-      if(validVessel(candidate))return{value:candidate,source:pdfSource(p,'VESSEL / VOYAGE · navio'),confidence:'Alta'};
-    }
+    const fromText=vesselFromText(p.text)||vesselFromText(p.flatText);
+    if(fromText&&validVessel(fromText))return{value:fromText,source:pdfSource(p,'VESSEL / VOYAGE · navio'),confidence:'Alta'};
   }
   for(const p of duimpPages(pages)){
     const text=all(p);
-    const m=text.match(/NAVIO\s+DE\s+EMBARQUE\s*:\s*([^|=\n]+?)(?=\s+(?:NAVIO\s+DE\s+CHEGADA|CONTAINERS?|VALOR\s+EM\s+MOEDA|$))/i);
-    const candidate=m?.[1]?.trim();
-    if(candidate&&validVessel(candidate))return{value:candidate,source:pdfSource(p,'NAVIO DE EMBARQUE · fallback do Extrato DUIMP'),confidence:'Média'};
+    const patterns=[
+      /NAVIO\s+DE\s+EMBARQUE\s*:\s*([A-Z0-9 .&'()\/-]{4,100}?)(?=\s+NAVIO\s+DE\s+CHEGADA|\s+CONTAINERS?\s*:|\s+VALOR\s+EM\s+MOEDA|$)/i,
+      /NAVIO\s+DE\s+EMBARQUE\s*[:#-]?\s*([A-Z0-9 .&'()\/-]{4,80})/i
+    ];
+    for(const pattern of patterns){
+      const m=text.match(pattern),candidate=m?.[1]?.trim().split(/\s*\/\s*/)[0].trim();
+      if(candidate&&validVessel(candidate))return{value:candidate,source:pdfSource(p,'NAVIO DE EMBARQUE · fallback do Extrato DUIMP'),confidence:'Média'};
+    }
   }
   return empty('Navio não localizado no campo VESSEL / VOYAGE do BL.');
 }
