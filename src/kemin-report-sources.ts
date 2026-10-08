@@ -224,14 +224,41 @@ async function ocrBox(canvas:HTMLCanvasElement,value:string,label:string,note:st
   }catch{return{target:null,context:[]}}
 }
 
+function exactNoteTotalSelection(items:PdfTextItem[],value:string,viewport:any,scale:number){
+  const ls=lines(items);
+  const anchorLine=ls.find(line=>line.normalized.includes('VALORTOTALDANOTA'));
+  if(!anchorLine)return null;
+  const anchorBox=merge(anchorLine.items.map(item=>itemBox(item,viewport,scale)));
+  if(!anchorBox)return null;
+
+  const candidates=items
+    .filter(item=>txt(item)&&item.transform&&sameNumber(txt(item),value))
+    .map(item=>({item,box:itemBox(item,viewport,scale)}));
+  if(!candidates.length)return null;
+
+  const ax=anchorBox.x+anchorBox.w/2,ay=anchorBox.y+anchorBox.h;
+  const ranked=candidates.map(candidate=>{
+    const cx=candidate.box.x+candidate.box.w/2,cy=candidate.box.y;
+    const horizontal=Math.abs(cx-ax);
+    const vertical=Math.abs(cy-ay);
+    const overlap=Math.max(0,Math.min(anchorBox.x+anchorBox.w,candidate.box.x+candidate.box.w)-Math.max(anchorBox.x,candidate.box.x));
+    const belowPenalty=cy<anchorBox.y-8?1200:0;
+    const columnPenalty=overlap>0?0:horizontal*2.5;
+    return{...candidate,score:vertical*2+horizontal+columnPenalty+belowPenalty};
+  }).sort((a,b)=>a.score-b.score);
+
+  return{target:ranked[0].box,context:[anchorBox,ranked[0].box]};
+}
+
 async function renderPdf(row:HTMLElement,parsed:{filename:string;page:number;note:string},container:HTMLElement,override?:{label:string;value:string}){
   const candidate=(await candidates()).find(c=>sameFile(c.filename,parsed.filename));if(!candidate)throw new Error('O PDF usado como fonte não está mais selecionado.');
   const pdf=await getDocument({data:new Uint8Array(candidate.bytes.slice(0))}).promise;if(parsed.page<1||parsed.page>pdf.numPages)throw new Error('Página da fonte não localizada.');
   const page=await pdf.getPage(parsed.page),scale=1.9,viewport=page.getViewport({scale}),canvas=document.createElement('canvas');canvas.width=Math.ceil(viewport.width);canvas.height=Math.ceil(viewport.height);const ctx=canvas.getContext('2d');if(!ctx)throw new Error('Não foi possível gerar o print.');
   await page.render({canvas,canvasContext:ctx,viewport}).promise;
   const content=await page.getTextContent(),items=content.items as PdfTextItem[],base=rowData(row),label=override?.label||base.label,value=override?.value||base.value,selection=select(items,value,label,parsed.note);
-  let target=selection.targetItems.length?merge(selection.targetItems.map(i=>itemBox(i,viewport,scale))):null;
-  let contextBoxes=selection.context.flatMap(l=>l.items.map(i=>itemBox(i,viewport,scale)));
+  const exactNote=/Valor Total da Nota/i.test(label)?exactNoteTotalSelection(items,value,viewport,scale):null;
+  let target=exactNote?.target||(selection.targetItems.length?merge(selection.targetItems.map(i=>itemBox(i,viewport,scale))):null);
+  let contextBoxes=exactNote?.context||selection.context.flatMap(l=>l.items.map(i=>itemBox(i,viewport,scale)));
   if(!target){
     const ocr=await ocrBox(canvas,value,label,parsed.note);target=ocr.target;if(ocr.context.length)contextBoxes=ocr.context;
   }
