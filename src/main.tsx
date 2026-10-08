@@ -18,6 +18,7 @@ import './client-capabilities.css';
 import './iguasport-client.css';
 import './xcmg-client.css';
 import './kemin-client.css';
+import './ceva-client.css';
 import './clients-tab';
 import './clients-home-entry';
 import './xcmg-report-sources';
@@ -34,6 +35,7 @@ import './iguasport-client';
 import './xcmg-client';
 import './kemin-report-sources';
 import './kemin-client';
+import './ceva-client';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode><App /></React.StrictMode>
