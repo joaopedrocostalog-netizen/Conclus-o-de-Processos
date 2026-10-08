@@ -56,13 +56,13 @@ function anchorsFor(label:string,note:string){
   if(/Valor Total da Nota/i.test(label))return['VALOR TOTAL DA NOTA'];
   if(/Ref\. do Cliente/i.test(label))return['IMP:','REF CLIENTE','INFORMACOES COMPLEMENTARES'];
   if(/Nº Documento/i.test(label))return['EXTRATO DA DUIMP'];
-  if(/Nº BL|AWB/i.test(label))return['BILL OF LADING NO','B/L NO','HBL'];
-  if(/Contêineres/i.test(label))return['MARKS & NUMBERS','CONTAINER'];
+  if(/Nº BL|AWB/i.test(label))return['BILL OF LADING NO','BILL OF LADING NUMBER','B/L NO','HBL'];
+  if(/Contêineres/i.test(label))return['CONTAINERS','CONTAINER','MARKS & NUMBERS'];
   if(/CNPJ/i.test(label))return['CNPJ'];
   if(/Remetente|Exportador/i.test(label))return['NOME/RAZAO SOCIAL','DESTINATARIO/REMETENTE','SHIPPER'];
   if(/Destinatário|Importador/i.test(label)||/^Cliente$/i.test(label))return['NOME DO IMPORTADOR','IDENTIFICACAO DO EMITENTE'];
   if(/Local de Armazenagem/i.test(label))return['UNIDADE DE ENTRADA/DESCARGA','RECINTO'];
-  if(/Agência Marítima/i.test(label))return['VESSEL / VOYAGE','AS THE CARRIER','CARRIER'];
+  if(/Agência Marítima/i.test(label))return['VESSEL / VOYAGE'];
   if(/Tipo Documento/i.test(label))return['EXTRATO DA DUIMP','DUIMP'];
   if(/Operação Marítima/i.test(label))return['DUIMP','IMPORTACAO'];
   return note?[note]:[];
@@ -82,6 +82,10 @@ function matchedItems(line:TextLine,value:string,label:string){
   if(/Peso Líquido|Valor Total da Nota/i.test(label)){
     const candidates=line.items.filter(item=>sameNumber(txt(item),value));if(candidates.length)return candidates;
   }
+  if(/Nº BL|AWB|Contêineres/i.test(label)){
+    const exactToken=line.items.filter(item=>norm(txt(item))===norm(value)||norm(txt(item)).includes(norm(value)));
+    if(exactToken.length)return exactToken;
+  }
   const nv=norm(value),tokens=value.split(/\s+/).map(norm).filter(t=>t.length>=2);
   const exact=line.items.filter(item=>{const ni=norm(txt(item));return ni&&(nv===ni||nv.includes(ni)||ni.includes(nv))});
   if(exact.length)return exact;
@@ -91,9 +95,32 @@ function matchedItems(line:TextLine,value:string,label:string){
 function select(items:PdfTextItem[],value:string,label:string,note:string){
   const ls=lines(items),anchors=anchorsFor(label,note).map(norm),anchorIndexes=ls.map((line,index)=>anchors.some(a=>a&&line.normalized.includes(a))?index:-1).filter(i=>i>=0),values=valueLines(ls,value,label);
   let target:TextLine|undefined;
-  if(values.length&&anchorIndexes.length){
-    target=values.map(line=>({line,index:ls.indexOf(line),score:Math.min(...anchorIndexes.map(a=>Math.abs(ls.indexOf(line)-a)))})).sort((a,b)=>a.score-b.score)[0]?.line;
-  }else target=values[0];
+
+  if(/Nº BL|AWB/i.test(label)){
+    const anchor=anchorIndexes[0];
+    if(anchor!==undefined){
+      const nearby=ls.slice(anchor,Math.min(ls.length,anchor+3));
+      target=nearby.find(line=>norm(line.text).includes(norm(value)))||values.find(line=>Math.abs(ls.indexOf(line)-anchor)<=2);
+    }
+  }else if(/Agência Marítima/i.test(label)){
+    const anchor=anchorIndexes[0];
+    if(anchor!==undefined){
+      const nearby=ls.slice(anchor,Math.min(ls.length,anchor+3));
+      target=nearby.find(line=>norm(line.text).includes(norm(value)))||values.find(line=>Math.abs(ls.indexOf(line)-anchor)<=2);
+    }
+  }else if(/Contêineres/i.test(label)){
+    const preferred=anchorIndexes.find(index=>ls[index].normalized.includes('CONTAINERS'));
+    if(preferred!==undefined){
+      const nearby=ls.slice(preferred,Math.min(ls.length,preferred+3));
+      target=nearby.find(line=>norm(line.text).includes(norm(value)))||values.find(line=>Math.abs(ls.indexOf(line)-preferred)<=2);
+    }
+  }
+
+  if(!target){
+    if(values.length&&anchorIndexes.length){
+      target=values.map(line=>({line,index:ls.indexOf(line),score:Math.min(...anchorIndexes.map(a=>Math.abs(ls.indexOf(line)-a)))})).sort((a,b)=>a.score-b.score)[0]?.line;
+    }else target=values[0];
+  }
   const context:TextLine[]=[];
   for(const index of anchorIndexes.slice(0,2))context.push(ls[index]);
   if(target&&!context.includes(target))context.push(target);
