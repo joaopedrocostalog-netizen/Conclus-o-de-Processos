@@ -25,7 +25,7 @@ export type KeminAnalysisField={label:KeminReportFieldLabel;value:string;source:
 export type KeminAnalysisSnapshot={client:'KEMIN';processType:string;summary:string;fields:KeminAnalysisField[];found:number;total:number};
 
 type OcrLine={text:string;x0:number;y0:number;x1:number;y1:number};
-type PdfPage={filename:string;page:number;rows:string[];text:string;flatText:string;ocr:boolean;ocrLines:OcrLine[]};
+type PdfPage={filename:string;page:number;rows:string[];text:string;flatText:string;ocr:boolean;ocrLines:OcrLine[];vesselHint:string|null};
 type Pick={value:string|null;source:string;confidence:'Alta'|'Média'|'Baixa'};
 
 const clean=(value:string)=>value.replace(/[ \t]+/g,' ').replace(/\n{3,}/g,'\n\n').trim();
@@ -57,6 +57,35 @@ function collectOcrLines(node:any,out:OcrLine[]){
   }
   for(const key of ['blocks','paragraphs'])if(Array.isArray(node[key]))for(const child of node[key])collectOcrLines(child,out);
 }
+function vesselFromText(text:string){
+  const normalized=clean(text);
+  const direct=normalized.match(/VESSEL\s*\/\s*VOYAGE\s*[:#-]?\s*([^\n\r]+)/i)?.[1]?.trim();
+  if(direct){
+    const value=direct.split(/\s*\/\s*/)[0].trim();
+    if(validVessel(value))return value;
+  }
+  const ls=normalized.split(/\r?\n/).map(line=>clean(line)).filter(Boolean);
+  const index=ls.findIndex(line=>/VESSEL\s*\/\s*VOYAGE/i.test(line));
+  if(index>=0){
+    const inline=ls[index].replace(/^.*?VESSEL\s*\/\s*VOYAGE\s*[:#-]?\s*/i,'').trim();
+    const candidates=[inline,ls[index+1]||'',ls[index+2]||''];
+    for(const candidate of candidates){
+      const value=candidate.split(/\s*\/\s*/)[0].trim();
+      if(validVessel(value))return value;
+    }
+  }
+  return null;
+}
+async function ocrVesselRegion(canvas:HTMLCanvasElement){
+  try{
+    const sx=0,sy=Math.floor(canvas.height*0.25),sw=Math.floor(canvas.width*0.58),sh=Math.floor(canvas.height*0.34);
+    const crop=document.createElement('canvas');crop.width=Math.max(1,sw);crop.height=Math.max(1,sh);
+    crop.getContext('2d')?.drawImage(canvas,sx,sy,sw,sh,0,0,sw,sh);
+    const worker=await getOcrWorker(),result=await worker.recognize(crop,{}, {text:true});
+    return vesselFromText(String(result?.data?.text||''));
+  }catch{return null}
+}
+
 async function ocrPage(page:any){
   const viewport=page.getViewport({scale:2});
   const canvas=document.createElement('canvas');canvas.width=Math.ceil(viewport.width);canvas.height=Math.ceil(viewport.height);
@@ -65,7 +94,8 @@ async function ocrPage(page:any){
   const worker=await getOcrWorker(),result=await worker.recognize(canvas,{}, {text:true,blocks:true}),text=clean(String(result?.data?.text||'')),ocrLines:OcrLine[]=[];
   collectOcrLines(result?.data,ocrLines);
   const rows=ocrLines.length?ocrLines.sort((a,b)=>a.y0-b.y0||a.x0-b.x0).map(line=>line.text):text.split(/\r?\n/).map((row:string)=>clean(row)).filter(Boolean);
-  return{rows,text,lines:ocrLines};
+  const vessel=vesselFromText(text)||await ocrVesselRegion(canvas);
+  return{rows,text,lines:ocrLines,vessel};
 }
 
 async function readPdf(file:File):Promise<PdfPage[]>{
@@ -73,11 +103,11 @@ async function readPdf(file:File):Promise<PdfPage[]>{
   const pages:PdfPage[]=[];
   for(let pageNumber=1;pageNumber<=pdf.numPages;pageNumber++){
     const page=await pdf.getPage(pageNumber),content=await page.getTextContent(),items=content.items as any[];
-    let pageRows=itemsToRows(items),flat=clean(items.filter(raw=>raw&&'str' in raw).map((raw:any)=>String(raw.str||'').trim()).filter(Boolean).join(' ')),ocr=false,ocrLines:OcrLine[]=[];
+    let pageRows=itemsToRows(items),flat=clean(items.filter(raw=>raw&&'str' in raw).map((raw:any)=>String(raw.str||'').trim()).filter(Boolean).join(' ')),ocr=false,ocrLines:OcrLine[]=[],vesselHint:string|null=null;
     if(flat.replace(/\s/g,'').length<40){
-      try{const scanned=await ocrPage(page);if(scanned.text){pageRows=scanned.rows;flat=scanned.text;ocr=true;ocrLines=scanned.lines}}catch{}
+      try{const scanned=await ocrPage(page);if(scanned.text){pageRows=scanned.rows;flat=scanned.text;ocr=true;ocrLines=scanned.lines;vesselHint=scanned.vessel||null}}catch{}
     }
-    pages.push({filename:file.name,page:pageNumber,rows:pageRows,text:clean(pageRows.join('\n')),flatText:flat,ocr,ocrLines});
+    pages.push({filename:file.name,page:pageNumber,rows:pageRows,text:clean(pageRows.join('\n')),flatText:flat,ocr,ocrLines,vesselHint});
   }
   return pages;
 }
@@ -259,6 +289,7 @@ function operation(pages:PdfPage[]):Pick{
 
 function shippingAgency(pages:PdfPage[]):Pick{
   for(const p of pages.filter(isBl)){
+    if(p.vesselHint&&validVessel(p.vesselHint))return{value:p.vesselHint,source:pdfSource(p,'VESSEL / VOYAGE · navio · OCR direcionado'),confidence:'Alta'};
     const spatial=ocrVessel(p);
     if(spatial&&validVessel(spatial))return{value:spatial,source:pdfSource(p,'VESSEL / VOYAGE · navio · leitura espacial do BL'),confidence:'Alta'};
     const text=all(p);
