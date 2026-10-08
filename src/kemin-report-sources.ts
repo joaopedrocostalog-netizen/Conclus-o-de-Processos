@@ -130,20 +130,70 @@ function crop(canvas:HTMLCanvasElement,boxes:Box[]){if(!boxes.length)return canv
 function ensureLightbox(){let modal=document.querySelector<HTMLElement>('.client-report-preview-modal');if(modal)return modal;modal=document.createElement('div');modal.className='client-report-preview-modal';modal.hidden=true;modal.innerHTML='<button type="button" class="client-report-preview-modal-close" aria-label="Fechar visualização">×</button><div class="client-report-preview-modal-body"><img alt="Visualização ampliada da fonte"></div>';document.body.appendChild(modal);const close=()=>{if(modal)modal.hidden=true};modal.addEventListener('click',e=>{if(e.target===modal)close()});modal.querySelector('.client-report-preview-modal-close')?.addEventListener('click',close);return modal}
 function openPreview(src:string,alt:string){const modal=ensureLightbox(),img=modal.querySelector<HTMLImageElement>('img');if(img){img.src=src;img.alt=alt;modal.hidden=false}}
 
-function collectOcrNodes(node:any,out:any[]){
+type OcrVisualLine={text:string;box:Box};
+function collectOcrVisualLines(node:any,out:OcrVisualLine[]){
   if(!node||typeof node!=='object')return;
-  if(typeof node.text==='string'&&node.bbox&&Number.isFinite(node.bbox.x0)&&Number.isFinite(node.bbox.y0)&&Number.isFinite(node.bbox.x1)&&Number.isFinite(node.bbox.y1))out.push(node);
-  for(const key of ['blocks','paragraphs','lines','words','symbols'])if(Array.isArray(node[key]))for(const child of node[key])collectOcrNodes(child,out);
+  if(Array.isArray(node.lines)){
+    for(const line of node.lines){
+      const text=String(line?.text||'').trim(),b=line?.bbox;
+      if(text&&b&&Number.isFinite(b.x0)&&Number.isFinite(b.y0)&&Number.isFinite(b.x1)&&Number.isFinite(b.y1)){
+        out.push({text,box:{x:b.x0,y:b.y0,w:b.x1-b.x0,h:b.y1-b.y0}});
+      }
+    }
+  }
+  for(const key of ['blocks','paragraphs'])if(Array.isArray(node[key]))for(const child of node[key])collectOcrVisualLines(child,out);
+}
+function overlapX(a:Box,b:Box){return Math.max(0,Math.min(a.x+a.w,b.x+b.w)-Math.max(a.x,b.x))}
+function visualAnchors(lines:OcrVisualLine[],label:string,note:string){
+  const anchors=anchorsFor(label,note).map(norm);
+  return lines.filter(line=>anchors.some(a=>a&&norm(line.text).includes(a)));
+}
+function visualValueMatches(lines:OcrVisualLine[],value:string,label:string){
+  const nv=norm(value);
+  return lines.filter(line=>{
+    const nt=norm(line.text);
+    if(nv&&(nt.includes(nv)||nv.includes(nt)))return true;
+    if(/Peso Líquido|Valor Total da Nota/i.test(label))return [...line.text.matchAll(/[\d.]+,\d{2,6}/g)].some(m=>sameNumber(m[0],value));
+    return false;
+  });
+}
+function nearestBelow(anchor:OcrVisualLine,lines:OcrVisualLine[],maxGap=150){
+  return lines.filter(line=>line.box.y>=anchor.box.y&&line.box.y-(anchor.box.y+anchor.box.h)<=maxGap&&overlapX(anchor.box,line.box)>0)
+    .sort((a,b)=>(a.box.y-(anchor.box.y+anchor.box.h))-(b.box.y-(anchor.box.y+anchor.box.h))||Math.abs(a.box.x-anchor.box.x)-Math.abs(b.box.x-anchor.box.x));
 }
 async function ocrBox(canvas:HTMLCanvasElement,value:string,label:string,note:string):Promise<{target:Box|null;context:Box[]}>{
   try{
-    const worker=await getOcrWorker(),result=await worker.recognize(canvas),nodes:any[]=[];collectOcrNodes(result?.data,nodes);
-    const nv=norm(value),anchors=anchorsFor(label,note).map(norm);
-    const targetNodes=nodes.filter(n=>{const nt=norm(String(n.text||''));return nt&&(nt.includes(nv)||nv.includes(nt)||(sameNumber(String(n.text||''),value)&&/Peso Líquido|Valor Total da Nota/i.test(label)))});
-    const anchorNodes=nodes.filter(n=>{const nt=norm(String(n.text||''));return anchors.some(a=>a&&nt.includes(a))});
-    const choose=(arr:any[])=>arr.sort((a,b)=>((a.bbox.x1-a.bbox.x0)*(a.bbox.y1-a.bbox.y0))-((b.bbox.x1-b.bbox.x0)*(b.bbox.y1-b.bbox.y0)))[0];
-    const t=choose(targetNodes),toBox=(n:any):Box=>({x:n.bbox.x0,y:n.bbox.y0,w:n.bbox.x1-n.bbox.x0,h:n.bbox.y1-n.bbox.y0});
-    return{target:t?toBox(t):null,context:anchorNodes.slice(0,2).map(toBox)};
+    const worker=await getOcrWorker(),result=await worker.recognize(canvas),visual:OcrVisualLine[]=[];
+    collectOcrVisualLines(result?.data,visual);
+    const anchors=visualAnchors(visual,label,note),values=visualValueMatches(visual,value,label);
+
+    if(/Nº BL|AWB/i.test(label)&&anchors.length){
+      const anchor=anchors.find(line=>/BILLOFLADING(?:NO|NUMBER)/.test(norm(line.text)))||anchors[0];
+      const target=nearestBelow(anchor,visual,120).find(line=>norm(line.text).includes(norm(value)))||values.find(line=>overlapX(anchor.box,line.box)>0);
+      if(target)return{target:target.box,context:[anchor.box,target.box]};
+    }
+
+    if(/Agência Marítima/i.test(label)&&anchors.length){
+      const anchor=anchors.find(line=>/VESSELVOYAGE/.test(norm(line.text)))||anchors[0];
+      const target=nearestBelow(anchor,visual,150).find(line=>norm(line.text).includes(norm(value)))||values.find(line=>overlapX(anchor.box,line.box)>0);
+      if(target)return{target:target.box,context:[anchor.box,target.box]};
+    }
+
+    if(/Contêineres/i.test(label)&&anchors.length){
+      const anchor=anchors.find(line=>/CONTAINERS/.test(norm(line.text)))||anchors[0];
+      const target=visual.find(line=>norm(line.text).includes(norm(value)))||nearestBelow(anchor,visual,100).find(line=>/[A-Z]{4}\d{7}/i.test(line.text));
+      if(target)return{target:target.box,context:[anchor.box,target.box]};
+    }
+
+    if(values.length){
+      let target=values[0];
+      if(anchors.length){
+        target=values.map(line=>({line,score:Math.min(...anchors.map(anchor=>Math.abs(line.box.y-anchor.box.y)+Math.abs(line.box.x-anchor.box.x)))})).sort((a,b)=>a.score-b.score)[0].line;
+      }
+      return{target:target.box,context:[...anchors.slice(0,2).map(a=>a.box),target.box]};
+    }
+
+    return{target:null,context:anchors.slice(0,2).map(a=>a.box)};
   }catch{return{target:null,context:[]}}
 }
 
