@@ -1,0 +1,70 @@
+/* UI-only performance tuning. Do not place client extraction rules here. */
+:root{--ui-fast:160ms;--ui-normal:210ms;--ui-ease:cubic-bezier(.22,.8,.22,1)}
+
+.clients-panel{
+  transform:translate3d(18px,0,0);
+  transition:
+    opacity var(--ui-normal) var(--ui-ease),
+    transform var(--ui-normal) var(--ui-ease),
+    visibility 0s linear var(--ui-normal),
+    grid-template-columns var(--ui-normal) var(--ui-ease);
+  will-change:auto;
+  backface-visibility:hidden;
+  contain:layout paint style;
+}
+.clients-panel.active{
+  transform:translate3d(0,0,0);
+  transition:
+    opacity var(--ui-normal) var(--ui-ease),
+    transform var(--ui-normal) var(--ui-ease),
+    visibility 0s,
+    grid-template-columns var(--ui-normal) var(--ui-ease);
+}
+.clients-panel:not(.active){content-visibility:hidden}
+
+.clients-list-view,.client-detail-view,.client-report-view{
+  transform:translate3d(14px,0,0);
+  transition:opacity var(--ui-fast) ease-out,transform var(--ui-fast) var(--ui-ease);
+  backface-visibility:hidden;
+  contain:layout paint style;
+}
+.clients-list-view.active,.client-detail-view.active,.client-report-view.active{transform:translate3d(0,0,0)}
+.clients-list-view:not(.active),.client-detail-view:not(.active),.client-report-view:not(.active){content-visibility:hidden}
+
+.clients-switching>header,.clients-switching>main,
+.clients-returning>header,.clients-returning>main{
+  animation-duration:var(--ui-normal)!important;
+}
+@keyframes clientsCardOut{
+  from{opacity:1;transform:translate3d(0,0,0) scale(1)}
+  to{opacity:.08;transform:translate3d(-12px,0,0) scale(.995)}
+}
+@keyframes clientsCardIn{
+  from{opacity:.08;transform:translate3d(-12px,0,0) scale(.995)}
+  to{opacity:1;transform:translate3d(0,0,0) scale(1)}
+}
+
+.client-card,.client-upload-card,.client-detail-back,.client-report-back,.client-report-copy,
+.client-analyze-button,.client-report-new,.clients-tab,.clients-back-tab{
+  transition-duration:var(--ui-fast)!important;
+}
+.client-card:hover{transform:translate3d(0,-2px,0)}
+.client-upload-card:hover,.client-upload-card.selected{transform:translate3d(0,-1px,0)}
+.clients-tab:hover,.clients-back-tab:hover,
+.client-detail-back:hover,.client-report-back:hover,.client-report-copy:hover,
+.client-analyze-button:hover:not(:disabled),.client-report-new:hover{transform:translate3d(0,-1px,0)}
+
+.client-logo-image img,.client-detail-logo-image img,.client-report-logo img,.brand img{
+  decoding:auto;
+  transform:translateZ(0);
+}
+img[data-ui-img-ready="false"]{opacity:0}
+img[data-ui-img-ready="true"]{opacity:1;transition:opacity 120ms ease-out}
+
+@media(max-width:780px){
+  .clients-panel{transform:translate3d(0,12px,0)}
+  .clients-panel.active{transform:translate3d(0,0,0)}
+}
+@media(prefers-reduced-motion:reduce){
+  img[data-ui-img-ready="false"],img[data-ui-img-ready="true"]{opacity:1!important;transition:none!important}
+}
