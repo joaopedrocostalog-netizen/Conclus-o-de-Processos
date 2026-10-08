@@ -122,12 +122,26 @@ function exporter(pages:PdfPage[]):Pick{
 
 function blNumber(pages:PdfPage[]):Pick{
   const patterns=[
-    /BILL\s+OF\s+LADING\s+NO\.?\s*[:\-]?\s*([A-Z0-9-]{5,30})/i,
-    /B\/L\s*(?:NO\.?|NUMBER)\s*[:\-]?\s*([A-Z0-9-]{5,30})/i,
-    /HBL\s*(?:NO\.?|NUMBER)?\s*[:\-]?\s*([A-Z0-9-]{5,30})/i
+    /BILL\s*OF\s*LADING\s*(?:NO\.?|NUMBER)\s*[:#\-]?\s*([A-Z0-9-]{5,30})/i,
+    /B\s*\/\s*L\s*(?:NO\.?|NUMBER)\s*[:#\-]?\s*([A-Z0-9-]{5,30})/i,
+    /HBL\s*(?:NO\.?|NUMBER)?\s*[:#\-]?\s*([A-Z0-9-]{5,30})/i
   ];
-  for(const p of pages.filter(isBl)){const text=all(p);for(const pattern of patterns){const m=text.match(pattern);if(m?.[1])return{value:m[1].trim(),source:pdfSource(p,'BILL OF LADING NO.'),confidence:'Alta'}}}
-  return empty('Nº BL / AWB não localizado nos PDFs.');
+  for(const p of pages.filter(isBl)){
+    const text=all(p);
+    for(const pattern of patterns){
+      const m=text.match(pattern);
+      if(m?.[1])return{value:m[1].trim(),source:pdfSource(p,'BILL OF LADING NO.'),confidence:'Alta'};
+    }
+    const rs=rows(p);
+    for(let i=0;i<rs.length;i++){
+      if(!/BILL\s*OF\s*LADING\s*(?:NO\.?|NUMBER)/i.test(rs[i]))continue;
+      const same=rs[i].match(/(?:NO\.?|NUMBER)\s*[:#\-]?\s*([A-Z0-9-]{5,30})/i);
+      if(same?.[1])return{value:same[1],source:pdfSource(p,'BILL OF LADING NO.'),confidence:'Alta'};
+      const next=rs[i+1]?.match(/^\s*([A-Z0-9-]{5,30})\s*$/i);
+      if(next?.[1])return{value:next[1],source:pdfSource(p,'BILL OF LADING NO.'),confidence:'Alta'};
+    }
+  }
+  return empty('Nº BL / AWB não localizado no BL.');
 }
 
 function storage(pages:PdfPage[]):Pick{
@@ -178,12 +192,20 @@ function operation(pages:PdfPage[]):Pick{
 function shippingAgency(pages:PdfPage[]):Pick{
   for(const p of pages.filter(isBl)){
     const text=all(p);
-    const vessel=capture(text,/VESSEL\s*\/\s*VOYAGE\s*[:\-]?\s*(.+?)(?=\s+(?:PORT\s+OF\s+LOADING|PORT\s+OF\s+DISCHARGE|PLACE\s+OF\s+DELIVERY|$))/i);
-    if(vessel)return{value:vessel,source:pdfSource(p,'VESSEL / VOYAGE'),confidence:'Alta'};
-    const carrier=capture(text,/(.{3,100}?)\s+AS\s+THE\s+CARRIER/i);
-    if(carrier)return{value:carrier,source:pdfSource(p,'AS THE CARRIER'),confidence:'Média'};
+    const vesselVoyage=capture(text,/VESSEL\s*\/\s*VOYAGE\s*[:\-]?\s*(.+?)(?=\s+(?:PORT\s+OF\s+LOADING|PORT\s+OF\s+DISCHARGE|PLACE\s+OF\s+DELIVERY|$))/i);
+    if(vesselVoyage){
+      const vessel=vesselVoyage.split(/\s*\/\s*/)[0]?.trim();
+      if(vessel)return{value:vessel,source:pdfSource(p,'VESSEL / VOYAGE · navio'),confidence:'Alta'};
+    }
+    const rs=rows(p);
+    for(let i=0;i<rs.length;i++){
+      if(!/VESSEL\s*\/\s*VOYAGE/i.test(rs[i]))continue;
+      const inline=rs[i].replace(/^.*?VESSEL\s*\/\s*VOYAGE\s*[:\-]?\s*/i,'').trim();
+      const candidate=(inline||rs[i+1]||'').split(/\s*\/\s*/)[0].trim();
+      if(candidate&&!/PORT\s+OF/i.test(candidate))return{value:candidate,source:pdfSource(p,'VESSEL / VOYAGE · navio'),confidence:'Alta'};
+    }
   }
-  return empty('Agência Marítima não localizada no BL.');
+  return empty('Navio não localizado no campo VESSEL / VOYAGE do BL.');
 }
 
 function importerCnpj(pages:PdfPage[]):Pick{
@@ -202,12 +224,19 @@ function importerCnpj(pages:PdfPage[]):Pick{
 
 function containers(pages:PdfPage[]):Pick{
   const found:Array<{value:string;page:PdfPage}>=[];
-  for(const p of pages){
-    for(const m of all(p).matchAll(/\b([A-Z]{4}\d{7})\b/g))found.push({value:m[1].toUpperCase(),page:p});
+  for(const p of duimpPages(pages)){
+    const text=all(p);
+    const containerBlock=text.match(/CONTAINERS?\s*:\s*([^|\n]+?)(?=\s*[|=]{2,}|\s+VALOR\s+EM\s+MOEDA|$)/i)?.[1]||'';
+    for(const m of containerBlock.matchAll(/\b([A-Z]{4}\d{7})\b/g))found.push({value:m[1].toUpperCase(),page:p});
+  }
+  if(!found.length){
+    for(const p of pages.filter(isBl))for(const m of all(p).matchAll(/\b([A-Z]{4}\d{7})\b/g))found.push({value:m[1].toUpperCase(),page:p});
   }
   const unique=[...new Map(found.map(item=>[item.value,item])).values()];
   if(!unique.length)return empty('Contêineres não localizados nos PDFs.');
-  const source=unique.length===1?pdfSource(unique[0].page,'contêiner identificado no documento'):`PDFs · ${unique.map(item=>`${item.page.filename} · página ${item.page.page} · ${item.value}`).join(' + ')} · contêineres identificados`;
+  const source=unique.length===1
+    ?pdfSource(unique[0].page,duimpPages(pages).includes(unique[0].page)?'CONTAINERS':'contêiner no BL')
+    :`PDFs · ${unique.map(item=>`${item.page.filename} · página ${item.page.page} · ${item.value}`).join(' + ')} · CONTAINERS`;
   return{value:unique.map(item=>item.value).join(', '),source,confidence:'Alta'};
 }
 
