@@ -163,10 +163,10 @@ function nearestBelow(anchor:OcrVisualLine,lines:OcrVisualLine[],maxGap=150){
 }
 async function directedVesselBox(canvas:HTMLCanvasElement,value:string):Promise<{target:Box|null;context:Box[]}>{
   try{
-    const sx=0,sy=Math.floor(canvas.height*0.25),sw=Math.floor(canvas.width*0.58),sh=Math.floor(canvas.height*0.34);
+    const sx=0,sy=Math.floor(canvas.height*0.22),sw=Math.floor(canvas.width*0.62),sh=Math.floor(canvas.height*0.42);
     const cropCanvas=document.createElement('canvas');cropCanvas.width=Math.max(1,sw);cropCanvas.height=Math.max(1,sh);
     cropCanvas.getContext('2d')?.drawImage(canvas,sx,sy,sw,sh,0,0,sw,sh);
-    const worker=await getOcrWorker(),result=await worker.recognize(cropCanvas,{}, {text:true,blocks:true}),visual:OcrVisualLine[]=[];
+    const worker=await getOcrWorker();try{await worker.setParameters({tessedit_pageseg_mode:'6' as any})}catch{};const result=await worker.recognize(cropCanvas,{}, {text:true,blocks:true}),visual:OcrVisualLine[]=[];
     collectOcrVisualLines(result?.data,visual);
     const anchors=visual.filter(line=>/VESSELVOYAGE/.test(norm(line.text)));
     const values=visual.filter(line=>norm(line.text).includes(norm(value)));
