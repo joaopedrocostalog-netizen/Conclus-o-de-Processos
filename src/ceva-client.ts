@@ -1,6 +1,11 @@
 import { CEVA_PROFILE } from './clients/ceva';
+import { runCevaAnalysis, type CevaAnalysisSnapshot } from './clients/ceva-analysis';
 
 export {};
+
+const escapeHtml=(value:string)=>value.replace(/[&<>'"]/g,char=>({
+  '&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'
+}[char]||char));
 
 function bindCeva(){
   const panel=document.querySelector<HTMLElement>('.clients-panel');
@@ -35,10 +40,7 @@ function bindCeva(){
         <p>${CEVA_PROFILE.description}</p>
       </div>
     </div>
-    <div class="ceva-mode-note">
-      <b>DOCUMENTOS PDF</b>
-      <span>Envie um ou vários PDFs do processo CEVA. A leitura e a lógica de extração serão exclusivas deste cliente.</span>
-    </div>
+    <div class="ceva-mode-note"><b>DOCUMENTOS PDF</b><span>Envie um ou vários PDFs do processo. A leitura da CEVA identifica os dados pelo conteúdo real dos documentos e mantém a lógica isolada dos outros clientes.</span></div>
     <div class="ceva-upload-grid">
       <label class="client-upload-card ceva-pdf-card">
         <input type="file" accept="application/pdf,.pdf" data-ceva-file="pdfs" multiple hidden>
@@ -53,6 +55,11 @@ function bindCeva(){
     <button type="button" class="client-analyze-button ceva-analyze-button" disabled>Analisar processo CEVA</button>
   `;
   content.appendChild(detail);
+
+  const report=document.createElement('div');
+  report.className='client-report-view ceva-report-view';
+  report.setAttribute('aria-hidden','true');
+  content.appendChild(report);
 
   const pdfInput=detail.querySelector<HTMLInputElement>('[data-ceva-file="pdfs"]')!;
   const status=detail.querySelector<HTMLElement>('.ceva-mode-status')!;
@@ -79,19 +86,65 @@ function bindCeva(){
   const showList=()=>{hideOtherViews();list.classList.add('active');list.setAttribute('aria-hidden','false')};
   const showDetail=()=>{hideOtherViews();detail.classList.add('active');detail.setAttribute('aria-hidden','false');detail.scrollTop=0;refresh()};
 
+  const showReport=(analysis:CevaAnalysisSnapshot)=>{
+    const rows=analysis.fields.map(field=>`
+      <div class="client-report-row">
+        <div class="client-report-field"><b>${escapeHtml(field.label)}</b><span>${escapeHtml(field.source)}</span></div>
+        <div class="client-report-value">${escapeHtml(field.value)}</div>
+        <div class="client-report-confidence">${escapeHtml(field.confidence)}</div>
+      </div>`).join('');
+
+    report.innerHTML=`
+      <div class="client-report-toolbar">
+        <button type="button" class="client-report-back ceva-report-back">← CEVA</button>
+        <button type="button" class="client-report-copy ceva-report-copy">Copiar relatório</button>
+      </div>
+      <div class="client-report-head">
+        <span class="client-report-logo"><img src="${CEVA_PROFILE.logo}" alt="Logo ${CEVA_PROFILE.displayName}"></span>
+        <div><span class="clients-kicker">Relatório por cliente</span><h2>Relatório CEVA</h2><p><b>Cliente do relatório: CEVA</b> · ${escapeHtml(analysis.summary)}</p></div>
+      </div>
+      <div class="client-report-metrics">
+        <div><span>Cliente</span><b>CEVA</b></div>
+        <div><span>Operação</span><b>${escapeHtml(analysis.processType)}</b></div>
+        <div><span>Campos</span><b>${analysis.found}/${analysis.total}</b></div>
+      </div>
+      <div class="client-report-table">${rows}</div>
+      <button type="button" class="client-report-new ceva-report-new">Nova análise CEVA</button>
+    `;
+
+    hideOtherViews();panel.classList.add('report-mode');report.classList.add('active');report.setAttribute('aria-hidden','false');report.scrollTop=0;
+    report.querySelector('.ceva-report-back')?.addEventListener('click',showDetail);
+    report.querySelector('.ceva-report-new')?.addEventListener('click',()=>{pdfInput.value='';showDetail()});
+    report.querySelector('.ceva-report-copy')?.addEventListener('click',()=>{
+      const text=['Cliente do relatório: CEVA',`Operação: ${analysis.processType}`,'',...analysis.fields.map(f=>`${f.label}: ${f.value}\nFonte: ${f.source}`)].join('\n');
+      void navigator.clipboard?.writeText(text);
+    });
+  };
+
   pdfInput.addEventListener('change',refresh);
   clear.hidden=true;
   clear.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();pdfInput.value='';refresh()});
-  analyzeButton.addEventListener('click',()=>{
+  analyzeButton.addEventListener('click',async()=>{
     const files=Array.from(pdfInput.files||[]);
     if(!files.length){refresh();return;}
-    status.textContent='PDFs CEVA carregados. A lógica de extração será configurada exclusivamente para este cliente.';
+    try{
+      analyzeButton.disabled=true;
+      analyzeButton.textContent='Analisando processo CEVA...';
+      status.textContent='Lendo e cruzando os PDFs da CEVA...';
+      const analysis=await runCevaAnalysis(files);
+      showReport(analysis);
+    }catch(error){
+      status.textContent=error instanceof Error?error.message:'Não foi possível concluir a análise CEVA.';
+    }finally{
+      analyzeButton.textContent='Analisar processo CEVA';
+      refresh();
+    }
   });
 
   card.addEventListener('click',showDetail);
   detail.querySelector('.ceva-back')?.addEventListener('click',showList);
-  document.querySelector('.clients-tab')?.addEventListener('click',()=>detail.classList.remove('active'));
-  document.querySelector('.clients-back-tab')?.addEventListener('click',()=>detail.classList.remove('active'));
+  document.querySelector('.clients-tab')?.addEventListener('click',()=>{detail.classList.remove('active');report.classList.remove('active')});
+  document.querySelector('.clients-back-tab')?.addEventListener('click',()=>{detail.classList.remove('active');report.classList.remove('active')});
   refresh();
   return true;
 }
