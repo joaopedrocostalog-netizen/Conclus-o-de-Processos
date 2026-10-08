@@ -24,7 +24,8 @@ export type KeminReportFieldLabel=typeof KEMIN_REPORT_FIELDS[number];
 export type KeminAnalysisField={label:KeminReportFieldLabel;value:string;source:string;confidence:'Alta'|'Média'|'Baixa'};
 export type KeminAnalysisSnapshot={client:'KEMIN';processType:string;summary:string;fields:KeminAnalysisField[];found:number;total:number};
 
-type PdfPage={filename:string;page:number;rows:string[];text:string;flatText:string;ocr:boolean};
+type OcrLine={text:string;x0:number;y0:number;x1:number;y1:number};
+type PdfPage={filename:string;page:number;rows:string[];text:string;flatText:string;ocr:boolean;ocrLines:OcrLine[]};
 type Pick={value:string|null;source:string;confidence:'Alta'|'Média'|'Baixa'};
 
 const clean=(value:string)=>value.replace(/[ \t]+/g,' ').replace(/\n{3,}/g,'\n\n').trim();
@@ -43,13 +44,28 @@ function itemsToRows(items:any[]):string[]{
   return groups.sort((a,b)=>b.y-a.y).map(g=>g.cells.sort((a,b)=>a.x-b.x).map(c=>c.str).join(' ').replace(/\s+/g,' ').trim()).filter(Boolean);
 }
 
+function collectOcrLines(node:any,out:OcrLine[]){
+  if(!node||typeof node!=='object')return;
+  if(Array.isArray(node.lines)){
+    for(const line of node.lines){
+      const text=clean(String(line?.text||''));
+      const box=line?.bbox;
+      if(text&&box&&Number.isFinite(box.x0)&&Number.isFinite(box.y0)&&Number.isFinite(box.x1)&&Number.isFinite(box.y1)){
+        out.push({text,x0:box.x0,y0:box.y0,x1:box.x1,y1:box.y1});
+      }
+    }
+  }
+  for(const key of ['blocks','paragraphs'])if(Array.isArray(node[key]))for(const child of node[key])collectOcrLines(child,out);
+}
 async function ocrPage(page:any){
   const viewport=page.getViewport({scale:2});
   const canvas=document.createElement('canvas');canvas.width=Math.ceil(viewport.width);canvas.height=Math.ceil(viewport.height);
-  const ctx=canvas.getContext('2d');if(!ctx)return{rows:[] as string[],text:''};
+  const ctx=canvas.getContext('2d');if(!ctx)return{rows:[] as string[],text:'',lines:[] as OcrLine[]};
   await page.render({canvas,canvasContext:ctx,viewport}).promise;
-  const worker=await getOcrWorker(),result=await worker.recognize(canvas),text=clean(String(result?.data?.text||''));
-  return{rows:text.split(/\r?\n/).map((row:string)=>clean(row)).filter(Boolean),text};
+  const worker=await getOcrWorker(),result=await worker.recognize(canvas),text=clean(String(result?.data?.text||'')),ocrLines:OcrLine[]=[];
+  collectOcrLines(result?.data,ocrLines);
+  const rows=ocrLines.length?ocrLines.sort((a,b)=>a.y0-b.y0||a.x0-b.x0).map(line=>line.text):text.split(/\r?\n/).map((row:string)=>clean(row)).filter(Boolean);
+  return{rows,text,lines:ocrLines};
 }
 
 async function readPdf(file:File):Promise<PdfPage[]>{
@@ -57,11 +73,11 @@ async function readPdf(file:File):Promise<PdfPage[]>{
   const pages:PdfPage[]=[];
   for(let pageNumber=1;pageNumber<=pdf.numPages;pageNumber++){
     const page=await pdf.getPage(pageNumber),content=await page.getTextContent(),items=content.items as any[];
-    let pageRows=itemsToRows(items),flat=clean(items.filter(raw=>raw&&'str' in raw).map((raw:any)=>String(raw.str||'').trim()).filter(Boolean).join(' ')),ocr=false;
+    let pageRows=itemsToRows(items),flat=clean(items.filter(raw=>raw&&'str' in raw).map((raw:any)=>String(raw.str||'').trim()).filter(Boolean).join(' ')),ocr=false,ocrLines:OcrLine[]=[];
     if(flat.replace(/\s/g,'').length<40){
-      try{const scanned=await ocrPage(page);if(scanned.text){pageRows=scanned.rows;flat=scanned.text;ocr=true}}catch{}
+      try{const scanned=await ocrPage(page);if(scanned.text){pageRows=scanned.rows;flat=scanned.text;ocr=true;ocrLines=scanned.lines}}catch{}
     }
-    pages.push({filename:file.name,page:pageNumber,rows:pageRows,text:clean(pageRows.join('\n')),flatText:flat,ocr});
+    pages.push({filename:file.name,page:pageNumber,rows:pageRows,text:clean(pageRows.join('\n')),flatText:flat,ocr,ocrLines});
   }
   return pages;
 }
@@ -120,6 +136,40 @@ function exporter(pages:PdfPage[]):Pick{
   return empty('Remetente / Exportador não localizado nos PDFs.');
 }
 
+function lineNorm(line:OcrLine){return norm(line.text).replace(/[^A-Z0-9]/g,'')}
+function horizontalOverlap(a:OcrLine,b:OcrLine){return Math.max(0,Math.min(a.x1,b.x1)-Math.max(a.x0,b.x0))}
+function belowAnchor(lines:OcrLine[],anchor:OcrLine,maxGap=120){
+  return lines.filter(line=>line.y0>=anchor.y0&&line.y0-anchor.y1<=maxGap&&horizontalOverlap(line,anchor)>0)
+    .sort((a,b)=>(a.y0-anchor.y1)-(b.y0-anchor.y1)||Math.abs(a.x0-anchor.x0)-Math.abs(b.x0-anchor.x0));
+}
+function ocrBlNumber(p:PdfPage){
+  const anchors=p.ocrLines.filter(line=>/BILLOFLADING(?:NO|NUMBER)/.test(lineNorm(line)));
+  for(const anchor of anchors){
+    const inline=anchor.text.match(/(?:BILL\s*OF\s*LADING\s*(?:NO\.?|NUMBER))\s*[:#-]?\s*([A-Z0-9-]{5,30})/i);
+    if(inline?.[1])return inline[1];
+    for(const line of belowAnchor(p.ocrLines,anchor,100)){
+      if(line===anchor)continue;
+      const match=line.text.match(/\b([A-Z]{2,}[A-Z0-9-]*\d[A-Z0-9-]*)\b/i);
+      if(match?.[1])return match[1];
+    }
+  }
+  return null;
+}
+function ocrVessel(p:PdfPage){
+  const anchors=p.ocrLines.filter(line=>/VESSELVOYAGE/.test(lineNorm(line)));
+  for(const anchor of anchors){
+    const inline=anchor.text.replace(/^.*?VESSEL\s*\/\s*VOYAGE\s*[:#-]?\s*/i,'').trim();
+    if(inline&&lineNorm({text:inline,x0:0,y0:0,x1:0,y1:0}).length>3&&!/VESSELVOYAGE/.test(norm(inline).replace(/[^A-Z0-9]/g,'')))return inline.split(/\s*\/\s*/)[0].trim();
+    for(const line of belowAnchor(p.ocrLines,anchor,120)){
+      if(line===anchor)continue;
+      if(/PORT\s+OF|PLACE\s+OF/i.test(line.text))continue;
+      const value=line.text.split(/\s*\/\s*/)[0].trim();
+      if(value.length>=4)return value;
+    }
+  }
+  return null;
+}
+
 function blNumber(pages:PdfPage[]):Pick{
   const patterns=[
     /BILL\s*OF\s*LADING\s*(?:NO\.?|NUMBER)\s*[:#\-]?\s*([A-Z0-9-]{5,30})/i,
@@ -127,11 +177,10 @@ function blNumber(pages:PdfPage[]):Pick{
     /HBL\s*(?:NO\.?|NUMBER)?\s*[:#\-]?\s*([A-Z0-9-]{5,30})/i
   ];
   for(const p of pages.filter(isBl)){
+    const spatial=ocrBlNumber(p);
+    if(spatial)return{value:spatial,source:pdfSource(p,'BILL OF LADING NO. · leitura espacial do BL'),confidence:'Alta'};
     const text=all(p);
-    for(const pattern of patterns){
-      const m=text.match(pattern);
-      if(m?.[1])return{value:m[1].trim(),source:pdfSource(p,'BILL OF LADING NO.'),confidence:'Alta'};
-    }
+    for(const pattern of patterns){const m=text.match(pattern);if(m?.[1])return{value:m[1].trim(),source:pdfSource(p,'BILL OF LADING NO.'),confidence:'Alta'}}
     const rs=rows(p);
     for(let i=0;i<rs.length;i++){
       if(!/BILL\s*OF\s*LADING\s*(?:NO\.?|NUMBER)/i.test(rs[i]))continue;
@@ -143,7 +192,6 @@ function blNumber(pages:PdfPage[]):Pick{
   }
   return empty('Nº BL / AWB não localizado no BL.');
 }
-
 function storage(pages:PdfPage[]):Pick{
   for(const p of duimpPages(pages)){
     const value=capture(all(p),/Unidade\s+de\s+entrada\s*\/\s*descarga\s*:\s*(.+?)(?=\s+(?:Embalagem|Hist[oó]rico|Peso\s+Bruto|Peso\s+L[ií]quido|$))/i);
@@ -191,6 +239,8 @@ function operation(pages:PdfPage[]):Pick{
 
 function shippingAgency(pages:PdfPage[]):Pick{
   for(const p of pages.filter(isBl)){
+    const spatial=ocrVessel(p);
+    if(spatial)return{value:spatial,source:pdfSource(p,'VESSEL / VOYAGE · navio · leitura espacial do BL'),confidence:'Alta'};
     const text=all(p);
     const vesselVoyage=capture(text,/VESSEL\s*\/\s*VOYAGE\s*[:\-]?\s*(.+?)(?=\s+(?:PORT\s+OF\s+LOADING|PORT\s+OF\s+DISCHARGE|PLACE\s+OF\s+DELIVERY|$))/i);
     if(vesselVoyage){
@@ -207,7 +257,6 @@ function shippingAgency(pages:PdfPage[]):Pick{
   }
   return empty('Navio não localizado no campo VESSEL / VOYAGE do BL.');
 }
-
 function importerCnpj(pages:PdfPage[]):Pick{
   const cnpj=/\b\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}\b/;
   for(const p of nfePages(pages)){
