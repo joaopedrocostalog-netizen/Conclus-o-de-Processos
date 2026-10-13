@@ -85,18 +85,15 @@ function formatBr(value:number,decimals:number){return new Intl.NumberFormat('pt
 
 function client(pages:PdfPage[]):Pick{
   for(const p of nfs(pages)){
-    const rs=p.rows;
-    const marker=rs.findIndex(r=>/TRANSPORTADOR\s*\/\s*VOLUMES\s+TRANSPORTADOS/i.test(r));
-    if(marker<0)continue;
-    const slice=rs.slice(marker+1,marker+8);
-    const labelIndex=slice.findIndex(r=>/RAZ[AÃ]O\s+SOCIAL/i.test(r));
-    if(labelIndex>=0){
-      const line=slice[labelIndex];
-      const same=line.match(/RAZ[AÃ]O\s+SOCIAL\s*[:\-]?\s*(.+?)(?=\s+(?:FRETE\s+POR\s+CONTA|C[ÓO]DIGO\s+ANTT|CNPJ\/CPF|$))/i)?.[1]?.trim();
-      const next=slice[labelIndex+1]||'';
-      const value=(same&&same.length>3?same:next.split(/\s+(?:1-DESTINATARIO|FRETE\s+POR\s+CONTA|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2})/i)[0]).trim();
-      if(value.length>3&&!/FRETE|CNPJ|ENDERE[CÇ]O|C[ÓO]DIGO\s+ANTT/i.test(value))
-        return{value,source:source(p,'TRANSPORTADOR/VOLUMES TRANSPORTADOS · RAZÃO SOCIAL'),confidence:'Alta'};
+    const heading=p.cells.find(cell=>/TRANSPORTADOR\s*\/\s*VOLUMES\s+TRANSPORTADOS/i.test(cell.str));
+    const label=p.cells.find(cell=>/RAZ[AÃ]O\s+SOCIAL/i.test(cell.str)&&(!heading||cell.y<heading.y&&heading.y-cell.y<65));
+    if(!label)continue;
+    const candidates=p.cells.filter(cell=>cell.y<label.y-2&&label.y-cell.y<23&&cell.x<label.x+210&&cell.x>=label.x-12&&cell.str.length>2&&!/^(?:FRETE|CNPJ|ENDERE[CÇ]O|C[ÓO]DIGO)/i.test(cell.str))
+      .sort((a,b)=>Math.abs(label.y-a.y)-Math.abs(label.y-b.y)||a.x-b.x);
+    if(candidates.length){
+      const base=candidates[0],sameRow=p.cells.filter(cell=>Math.abs(cell.y-base.y)<2&&cell.x>=label.x-12&&cell.x<label.x+230).sort((a,b)=>a.x-b.x);
+      const value=sameRow.map(cell=>cell.str).join(' ').trim();
+      if(value.length>3&&!/RAZ[AÃ]O SOCIAL/i.test(value))return{value,source:source(p,'TRANSPORTADOR/VOLUMES TRANSPORTADOS · RAZÃO SOCIAL'),confidence:'Alta'};
     }
   }
   return empty('Cliente não localizado no campo RAZÃO SOCIAL do Transportador da NF.');
@@ -200,19 +197,17 @@ function nfeKey(p:PdfPage,value:string){
 function noteTotal(pages:PdfPage[]):Pick{
   const found:Array<{key:string;value:number;display:string;page:PdfPage}>=[];
   for(const p of nfs(pages)){
-    const labels=p.cells.filter(cell=>/VALOR\s+TOTAL\s+DA\s+NOTA/i.test(cell.str));
+    const noteTokens=p.cells.filter(cell=>/^NOTA$/i.test(cell.str.trim()));
+    const labels=noteTokens.filter(note=>p.cells.some(cell=>/TOTAL/i.test(cell.str)&&Math.abs(cell.y-note.y)<3&&cell.x<note.x&&note.x-cell.x<95));
     let display:string|null=null;
-    for(const label of labels){
-      const hits=p.cells.filter(cell=>cell.y<label.y&&cell.y>=label.y-32&&Math.abs(cell.x-label.x)<135&&/^(?:R\$\s*)?\d[\d.]*,\d{2}$/.test(cell.str.trim()))
-        .sort((a,b)=>b.y-a.y||a.x-b.x);
-      if(hits.length){display=hits[0].str.replace(/^R\$\s*/,'').trim();break}
+    for(const label of labels.sort((a,b)=>a.y-b.y)){
+      const hits=p.cells.filter(cell=>label.y-cell.y>=2&&label.y-cell.y<25&&cell.x>=label.x-135&&cell.x<=label.x+40&&/^\d[\d.]*,\d{2}$/.test(cell.str.trim()))
+        .sort((a,b)=>Math.abs(label.y-a.y)-Math.abs(label.y-b.y)||b.x-a.x);
+      if(hits.length){display=hits[0].str.trim();break}
     }
     if(!display){
-      const lines=p.rows,anchor=lines.findIndex(line=>/VALOR\s+TOTAL\s+DA\s+NOTA/i.test(line));
-      if(anchor>=0){
-        const match=lines.slice(anchor,anchor+3).join(' ').match(/VALOR\s+TOTAL\s+DA\s+NOTA\s*([\d.]+,\d{2})/i);
-        display=match?.[1]||null;
-      }
+      const rs=p.rows,ix=rs.findIndex(row=>/VALOR\s+TOTAL\s+DA\s+NOTA/i.test(row));
+      if(ix>=0){const m=rs.slice(ix,ix+3).join(' ').match(/VALOR\s+TOTAL\s+DA\s+NOTA\s+([\d.]+,\d{2})/i);display=m?.[1]||null}
     }
     if(!display)continue;
     const value=brNumber(display);if(value===null)continue;
@@ -220,8 +215,8 @@ function noteTotal(pages:PdfPage[]):Pick{
   }
   const unique=[...new Map(found.map(x=>[x.key,x])).values()];
   if(!unique.length)return empty('Valor Total da Nota não localizado no quadro VALOR TOTAL DA NOTA da NF.');
-  const total=unique.reduce((a,b)=>a+b.value,0);
-  const src=unique.length===1?source(unique[0].page,'VALOR TOTAL DA NOTA'):`Soma de ${unique.length} NFs únicas · ${unique.map(i=>`${i.page.filename} · página ${i.page.page} · R$ ${i.display}`).join(' + ')}`;
+  const total=unique.reduce((sum,item)=>sum+item.value,0);
+  const src=unique.length===1?source(unique[0].page,'VALOR TOTAL DA NOTA'):`Soma de ${unique.length} NFs únicas · ${unique.map(item=>`${item.page.filename} · página ${item.page.page} · R$ ${item.display}`).join(' + ')}`;
   return{value:formatBr(total,2),source:src,confidence:'Alta'};
 }
 function field(label:CevaReportFieldLabel,pick:Pick):CevaAnalysisField{return{label,value:pick.value||'—',source:pick.source,confidence:pick.confidence}}
