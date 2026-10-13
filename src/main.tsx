@@ -39,6 +39,7 @@ import './kemin-report-sources';
 import './kemin-client';
 import './ceva-report-sources';
 import './ceva-client';
+import './brasalpla-report-sources';
 import './brasalpla-client';
 import './ui-performance';
 
