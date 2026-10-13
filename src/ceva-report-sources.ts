@@ -249,42 +249,21 @@ async function ocrBox(canvas:HTMLCanvasElement,value:string,label:string,note:st
 }
 
 function exactNoteTotalSelection(items:PdfTextItem[],value:string,viewport:any,scale:number){
-  const phrase='VALORTOTALDANOTA';
-  const ls=lines(items);
-  const anchorLine=ls.find(line=>line.normalized.includes(phrase));
-  if(!anchorLine)return null;
-
-  // Prefer the exact PDF text block for the label instead of merging the whole tax row.
-  let anchorItems=anchorLine.items.filter(item=>norm(txt(item)).includes(phrase));
-  if(!anchorItems.length){
-    const phraseTokens=new Set(['VALOR','TOTAL','DA','NOTA']);
-    anchorItems=anchorLine.items.filter(item=>phraseTokens.has(norm(txt(item))));
-  }
-  const anchorBox=merge((anchorItems.length?anchorItems:anchorLine.items).map(item=>itemBox(item,viewport,scale)));
-  if(!anchorBox)return null;
-
-  const candidates=items
-    .filter(item=>txt(item)&&item.transform&&sameNumber(txt(item),value))
-    .map(item=>({item,box:itemBox(item,viewport,scale)}));
-  if(!candidates.length)return null;
-
-  const anchorCenterX=anchorBox.x+anchorBox.w/2;
-  const strict=candidates.filter(candidate=>{
-    const centerX=candidate.box.x+candidate.box.w/2;
-    const verticalGap=candidate.box.y-(anchorBox.y+anchorBox.h);
-    const sameColumn=centerX>=anchorBox.x-35&&centerX<=anchorBox.x+anchorBox.w+35;
-    return verticalGap>=-10&&verticalGap<=85&&sameColumn;
-  });
-
-  const pool=strict.length?strict:candidates;
-  const ranked=pool.map(candidate=>{
-    const centerX=candidate.box.x+candidate.box.w/2;
-    const verticalGap=Math.abs(candidate.box.y-(anchorBox.y+anchorBox.h));
-    const horizontalGap=Math.abs(centerX-anchorCenterX);
-    return{...candidate,score:verticalGap*6+horizontalGap};
-  }).sort((a,b)=>a.score-b.score);
-
-  return{target:ranked[0].box,context:[anchorBox,ranked[0].box]};
+  const labels=items.filter(item=>norm(txt(item))==='NOTA').map(item=>({item,box:itemBox(item,viewport,scale)}));
+  const anchored=labels.filter(label=>items.some(other=>{
+    const token=norm(txt(other)),box=itemBox(other,viewport,scale);
+    return /TOTAL/.test(token)&&Math.abs(box.y-label.box.y)<13&&box.x<label.box.x&&label.box.x-box.x<185;
+  }));
+  const values=items.filter(item=>sameNumber(txt(item),value)).map(item=>({item,box:itemBox(item,viewport,scale)}));
+  if(!anchored.length||!values.length)return null;
+  const ranked=anchored.flatMap(label=>values.map(candidate=>{
+    const dy=candidate.box.y-label.box.y;
+    const dx=Math.abs(candidate.box.x-label.box.x);
+    return{label,candidate,score:(dy<0?10000:0)+Math.abs(dy)*4+dx*0.8+(dx>230?3000:0)};
+  })).sort((x,y)=>x.score-y.score);
+  const best=ranked[0];
+  if(!best||best.score>=3000)return null;
+  return{target:best.candidate.box,context:[best.label.box,best.candidate.box]};
 }
 
 async function renderPdf(row:HTMLElement,parsed:{filename:string;page:number;note:string},container:HTMLElement,override?:{label:string;value:string}){
