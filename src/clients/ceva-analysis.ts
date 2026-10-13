@@ -24,7 +24,8 @@ export type CevaReportFieldLabel=typeof CEVA_REPORT_FIELDS[number];
 export type CevaAnalysisField={label:CevaReportFieldLabel;value:string;source:string;confidence:'Alta'|'Média'|'Baixa'};
 export type CevaAnalysisSnapshot={client:'CEVA';processType:string;summary:string;fields:CevaAnalysisField[];found:number;total:number};
 
-type PdfPage={filename:string;page:number;rows:string[];text:string;flatText:string;ocr:boolean};
+type Cell={str:string;x:number;y:number;w:number;h:number};
+type PdfPage={filename:string;page:number;rows:string[];text:string;flatText:string;ocr:boolean;cells:Cell[]};
 type Pick={value:string|null;source:string;confidence:'Alta'|'Média'|'Baixa'};
 
 const clean=(value:string)=>value.replace(/[ \t]+/g,' ').replace(/\n{3,}/g,'\n\n').trim();
@@ -36,6 +37,7 @@ const source=(p:PdfPage,note:string)=>`PDF · ${p.filename} · página ${p.page}
 let workerPromise:Promise<any>|null=null;
 function getWorker(){return workerPromise||(workerPromise=createWorker('eng+por'))}
 
+function itemsToCells(items:any[]):Cell[]{return items.filter(raw=>raw&&'str' in raw&&String(raw.str||'').trim()).map((raw:any)=>({str:String(raw.str||'').trim(),x:Number(raw.transform?.[4]||0),y:Number(raw.transform?.[5]||0),w:Number(raw.width||0),h:Number(raw.height||0)}))}
 function itemsToRows(items:any[]):string[]{
   const cells=items.filter(raw=>raw&&'str' in raw&&String(raw.str||'').trim()).map((raw:any)=>({str:String(raw.str||'').trim(),x:Number(raw.transform?.[4]||0),y:Number(raw.transform?.[5]||0)}));
   const groups:Array<{y:number;cells:typeof cells}>=[];
@@ -58,11 +60,12 @@ async function readPdf(file:File):Promise<PdfPage[]>{
   const pages:PdfPage[]=[];
   for(let pageNumber=1;pageNumber<=pdf.numPages;pageNumber++){
     const page=await pdf.getPage(pageNumber),content=await page.getTextContent(),items=content.items as any[];
+    const cells=itemsToCells(items);
     let rows=itemsToRows(items),flat=clean(items.filter(raw=>raw&&'str' in raw).map((raw:any)=>String(raw.str||'').trim()).filter(Boolean).join(' ')),ocr=false;
     if(flat.replace(/\s/g,'').length<60){
       try{const scanned=await ocrPage(page);if(scanned){flat=scanned;rows=scanned.split(/\r?\n/).map(clean).filter(Boolean);ocr=true}}catch{}
     }
-    pages.push({filename:file.name,page:pageNumber,rows,text:clean(rows.join('\n')),flatText:flat,ocr});
+    pages.push({filename:file.name,page:pageNumber,rows,text:clean(rows.join('\n')),flatText:flat,ocr,cells});
   }
   return pages;
 }
@@ -82,30 +85,36 @@ function formatBr(value:number,decimals:number){return new Intl.NumberFormat('pt
 
 function client(pages:PdfPage[]):Pick{
   for(const p of nfs(pages)){
-    const text=all(p),start=text.search(/TRANSPORTADOR\s*\/\s*VOLUMES\s+TRANSPORTADOS/i);
-    if(start>=0){
-      const block=text.slice(start,start+900);
-      const m=block.match(/RAZ[AÃ]O\s+SOCIAL\s+(.+?)(?=\s+(?:FRETE\s+POR\s+CONTA|C[ÓO]DIGO\s+ANTT|CNPJ\/CPF|ENDERE[CÇ]O))/i);
-      if(m?.[1])return{value:one(m[1]),source:source(p,'Transportador / Razão Social'),confidence:'Alta'};
+    const rs=p.rows;
+    const marker=rs.findIndex(r=>/TRANSPORTADOR\s*\/\s*VOLUMES\s+TRANSPORTADOS/i.test(r));
+    if(marker<0)continue;
+    const slice=rs.slice(marker+1,marker+8);
+    const labelIndex=slice.findIndex(r=>/RAZ[AÃ]O\s+SOCIAL/i.test(r));
+    if(labelIndex>=0){
+      const line=slice[labelIndex];
+      const same=line.match(/RAZ[AÃ]O\s+SOCIAL\s*[:\-]?\s*(.+?)(?=\s+(?:FRETE\s+POR\s+CONTA|C[ÓO]DIGO\s+ANTT|CNPJ\/CPF|$))/i)?.[1]?.trim();
+      const next=slice[labelIndex+1]||'';
+      const value=(same&&same.length>3?same:next.split(/\s+(?:1-DESTINATARIO|FRETE\s+POR\s+CONTA|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2})/i)[0]).trim();
+      if(value.length>3&&!/FRETE|CNPJ|ENDERE[CÇ]O|C[ÓO]DIGO\s+ANTT/i.test(value))
+        return{value,source:source(p,'TRANSPORTADOR/VOLUMES TRANSPORTADOS · RAZÃO SOCIAL'),confidence:'Alta'};
     }
   }
-  return empty('Cliente não localizado no quadro Transportador da NF.');
+  return empty('Cliente não localizado no campo RAZÃO SOCIAL do Transportador da NF.');
 }
 function docType(pages:PdfPage[]):Pick{for(const p of duimps(pages))return{value:'DUIMP',source:source(p,'Extrato da DUIMP'),confidence:'Alta'};return empty('Tipo Documento não localizado.')}
 function exporter(pages:PdfPage[]):Pick{
   for(const p of nfs(pages)){
-    const value=capture(all(p),/DESTINATARIO\s*\/\s*REMETENTE[\s\S]{0,220}?NOME\s*\/\s*RAZ[AÃ]O\s+SOCIAL\s+(.+?)(?=\s+(?:CNPJ\/CPF|DATA\s+DE\s+EMISS[AÃ]O|ENDERE[CÇ]O))/i);
-    if(value)return{value,source:source(p,'DESTINATÁRIO/REMETENTE · NOME/RAZÃO SOCIAL'),confidence:'Alta'};
+    const rs=p.rows,marker=rs.findIndex(r=>/DESTINAT[ÁA]RIO\s*\/\s*REMETENTE/i.test(r));
+    if(marker<0)continue;
+    const section=rs.slice(marker+1,marker+12);
+    const labelIndex=section.findIndex(r=>/NOME\s*\/\s*RAZ[AÃ]O\s+SOCIAL/i.test(r));
+    if(labelIndex<0)continue;
+    const inline=section[labelIndex].replace(/^.*?NOME\s*\/\s*RAZ[AÃ]O\s+SOCIAL\s*/i,'').split(/\s+(?:CNPJ\/CPF|DATA\s+DE\s+EMISS[AÃ]O)/i)[0].trim();
+    const following=(section[labelIndex+1]||'').split(/\s+(?:\d{2}\/\d{2}\/\d{4}|CNPJ\/CPF|DATA\s+DE\s+EMISS[AÃ]O)/i)[0].trim();
+    const value=following.length>3?following:inline;
+    if(value.length>3&&!/^(CNPJ|CPF|DATA|ENDERE[CÇ]O)/i.test(value))return{value,source:source(p,'DESTINATÁRIO/REMETENTE · NOME/RAZÃO SOCIAL'),confidence:'Alta'};
   }
-  for(const p of duimps(pages)){
-    const value=capture(all(p),/C[oó]digo\s+do\s+Exportador\s+Estrangeiro\s*:\s*(?:OPE_\d+\s*-\s*)?(.+?)(?=\s+(?:Vers[aã]o|Endere[cç]o|Dados\s+da\s+Mercadoria))/i);
-    if(value)return{value,source:source(p,'Exportador Estrangeiro'),confidence:'Alta'};
-  }
-  for(const p of bls(pages)){
-    const value=capture(all(p),/SHIPPER(?:\s*\([^)]*\))?\s*[:\-]?\s*(.+?)(?=\s+(?:CONSIGNEE|Carrier|B\/L|Bill\s+of\s+Lading))/i);
-    if(value)return{value,source:source(p,'SHIPPER'),confidence:'Média'};
-  }
-  return empty('Remetente / Exportador não localizado.');
+  return empty('Remetente / Exportador não localizado na NF.');
 }
 function blNumber(pages:PdfPage[]):Pick{
   for(const p of duimps(pages)){const m=all(p).match(/CONHECIMENTO\.*\s*:\s*([A-Z0-9-]{8,})/i);if(m?.[1])return{value:m[1],source:source(p,'CONHECIMENTO'),confidence:'Alta'}}
@@ -138,9 +147,19 @@ function importer(pages:PdfPage[]):Pick{
 }
 function operation(pages:PdfPage[]):Pick{for(const p of duimps(pages))return{value:'Importação',source:source(p,'operação identificada pelo Extrato da DUIMP'),confidence:'Alta'};return empty('Operação não identificada.')}
 function vessel(pages:PdfPage[]):Pick{
-  for(const p of duimps(pages)){const v=capture(all(p),/(?:VE[IÍ]CULO|NAVIO\s+DE\s+EMBARQUE)\.*\s*:\s*(.+?)(?=\s+(?:DATA\s+DA\s+CHEGADA|CONTEINERES|$))/i);if(v)return{value:v,source:source(p,'VEÍCULO / Navio'),confidence:'Alta'}}
-  for(const p of bls(pages)){const v=capture(all(p),/(?:VESSEL(?:\s+NAME)?|Vessel)\s*:?\s*(.+?)(?=\s+(?:Voyage|VOYAGE|Port\s+of\s+Loading|$))/i);if(v)return{value:v,source:source(p,'Vessel'),confidence:'Média'}}
-  return empty('Agência Marítima / Navio não localizado.');
+  for(const p of bls(pages)){
+    const text=p.text;
+    const patterns=[
+      /(?:^|\n)\s*Carrier\s*:\s*([^\n]{5,100})/im,
+      /Carrier\s*:\s*(.+?)(?=\s+(?:Bill\s+of\s+Lading|Shipper|Consignee|$))/i
+    ];
+    for(const pattern of patterns){
+      const m=text.match(pattern),value=m?.[1]?.trim();
+      if(value&&value.length>4&&!/BILL\s+OF\s+LADING|SHIPPER/i.test(value))
+        return{value,source:source(p,'Carrier · cabeçalho do Bill of Lading'),confidence:'Alta'};
+    }
+  }
+  return empty('Agência Marítima não localizada no campo Carrier do BL.');
 }
 function importerCnpj(pages:PdfPage[]):Pick{
   for(const p of duimps(pages)){const m=all(p).match(/CNPJ\s+do\s+importador\s*:\s*(\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2})/i);if(m?.[1])return{value:m[1],source:source(p,'CNPJ do importador'),confidence:'Alta'}}
@@ -181,13 +200,26 @@ function nfeKey(p:PdfPage,value:string){
 function noteTotal(pages:PdfPage[]):Pick{
   const found:Array<{key:string;value:number;display:string;page:PdfPage}>=[];
   for(const p of nfs(pages)){
-    const text=all(p),m=text.match(/VALOR\s+TOTAL\s+DA\s+NOTA\s+([\d.]+,\d{2})/i);
-    if(!m?.[1])continue;
-    const value=brNumber(m[1]);if(value===null)continue;
-    found.push({key:nfeKey(p,m[1]),value,display:m[1],page:p});
+    const labels=p.cells.filter(cell=>/VALOR\s+TOTAL\s+DA\s+NOTA/i.test(cell.str));
+    let display:string|null=null;
+    for(const label of labels){
+      const hits=p.cells.filter(cell=>cell.y<label.y&&cell.y>=label.y-32&&Math.abs(cell.x-label.x)<135&&/^(?:R\$\s*)?\d[\d.]*,\d{2}$/.test(cell.str.trim()))
+        .sort((a,b)=>b.y-a.y||a.x-b.x);
+      if(hits.length){display=hits[0].str.replace(/^R\$\s*/,'').trim();break}
+    }
+    if(!display){
+      const lines=p.rows,anchor=lines.findIndex(line=>/VALOR\s+TOTAL\s+DA\s+NOTA/i.test(line));
+      if(anchor>=0){
+        const match=lines.slice(anchor,anchor+3).join(' ').match(/VALOR\s+TOTAL\s+DA\s+NOTA\s*([\d.]+,\d{2})/i);
+        display=match?.[1]||null;
+      }
+    }
+    if(!display)continue;
+    const value=brNumber(display);if(value===null)continue;
+    found.push({key:nfeKey(p,display),value,display,page:p});
   }
   const unique=[...new Map(found.map(x=>[x.key,x])).values()];
-  if(!unique.length)return empty('Valor Total da Nota não localizado.');
+  if(!unique.length)return empty('Valor Total da Nota não localizado no quadro VALOR TOTAL DA NOTA da NF.');
   const total=unique.reduce((a,b)=>a+b.value,0);
   const src=unique.length===1?source(unique[0].page,'VALOR TOTAL DA NOTA'):`Soma de ${unique.length} NFs únicas · ${unique.map(i=>`${i.page.filename} · página ${i.page.page} · R$ ${i.display}`).join(' + ')}`;
   return{value:formatBr(total,2),source:src,confidence:'Alta'};
