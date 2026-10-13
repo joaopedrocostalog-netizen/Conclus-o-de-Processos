@@ -30,7 +30,7 @@ function sameFile(a:string,b:string){const aa=a.replace(/\\/g,'/').toLowerCase()
 function parsePdfSource(source:string){const m=source.match(/^PDF\s*·\s*(.*?)\s*·\s*página\s*(\d+)\s*·\s*(.*)$/i);return m?{filename:m[1].trim(),page:Number(m[2]),note:m[3].trim()}:null}
 function parseAggregate(source:string){
   if(!/^Soma de\s+\d+\s+.+?\s*·/i.test(source))return null;
-  const body=source.replace(/^Soma de\s+\d+\s+.+?\s*·\s*/i,''),parts:SourcePart[]=[];
+  const body=source.replace(/^Soma de\s+\d+\s+.+?\s*·\s*/i,'').split(/\s*·\s*(?:NF mãe excluída|ATENÇÃO:|Conferência com NF mãe):?/i)[0],parts:SourcePart[]=[];
   const re=/(?:^|\s\+\s)(.*?)\s*·\s*página\s*(\d+)\s*·\s*(?:R\$\s*)?([\d.]+,\d{2,6})(?=\s\+\s|$)/gi;
   for(const m of body.matchAll(re))parts.push({filename:m[1].trim(),page:Number(m[2]),value:m[3].trim()});
   return parts.length?parts:null;
