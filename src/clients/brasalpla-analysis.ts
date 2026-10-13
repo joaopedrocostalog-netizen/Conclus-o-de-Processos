@@ -133,23 +133,25 @@ function importer(pages:PdfPage[]):Pick{
 }
 function operation(pages:PdfPage[]):Pick{for(const p of duimps(pages))return{value:'Importação',source:source(p,'operação identificada pelo Extrato da DUIMP'),confidence:'Alta'};return empty('Operação não identificada.')}
 function vessel(pages:PdfPage[]):Pick{
+  // Reject incidental "Carrier not to be responsible" in the NOTIFY PARTY box.
+  // On scanned BLs the carrier can be split across OCR lines or only in the signature.
   for(const p of bls(pages)){
-    const texts=[...p.rows,p.text,p.flatText];
-    for(const text of texts){
-      // The scanned CMA CGM B/L has the carrier in a compact inline label.
-      const match=text.match(/\bCARRIER\s*[:：\-]?\s*(CMA\s*CGM|[A-Z][A-Z0-9.&\-]*(?:\s+[A-Z][A-Z0-9.&\-]*){0,5})(?=\s|$)/i);
-      if(match?.[1]){
-        let value=one(match[1]);
-        if(/^CMA\s*CGM/i.test(value))value='CMA CGM';
-        if(!/^(?:SHIPPER|CONSIGNEE|NOTIFY|THE|VESSEL)$/i.test(value))
-          return{value,source:source(p,'CARRIER · Bill of Lading'),confidence:'Alta'};
-      }
+    for(const row of p.rows){
+      const m=row.match(/^\s*CARRIER\s*[:：\-]\s*(.+)$/i);
+      if(!m)continue;
+      const raw=one(m[1]);
+      if(/^CMA\s*CGM\b/i.test(raw))return{value:'CMA CGM',source:source(p,'CARRIER · cabeçalho BL'),confidence:'Alta'};
+      const name=raw.split(/\s{2,}|(?:Soci[eé]t[eé]|Head Office|Tel\s*:)/i)[0].trim();
+      if(name.length>3&&!/\b(?:NOT|RESPONSIBLE|FAILURE|NOTIFY)\b/i.test(name))
+        return{value:name,source:source(p,'CARRIER · cabeçalho BL'),confidence:'Alta'};
     }
-    const blText=all(p);
-    if(/\bCMA\s*CGM\b/i.test(blText)&&/BILL\s+OF\s+LADING|CARRIER|VOYAGE/i.test(blText))
-      return{value:'CMA CGM',source:source(p,'CMA CGM · Carrier do Bill of Lading'),confidence:'Média'};
+    const text=all(p);
+    if(/\bCMA\s*CGM\b/i.test(text)&&/BILL\s+OF\s+LADING|SHIPPER|CARRIER|VOYAGE/i.test(text))
+      return{value:'CMA CGM',source:source(p,'CARRIER / assinatura da transportadora no BL'),confidence:'Média'};
+    const signed=text.match(/SIGNED\s+FOR\s+THE\s+CARRIER\s+([A-Z][A-Z0-9 .&-]{3,55})/i);
+    if(signed?.[1])return{value:one(signed[1]),source:source(p,'SIGNED FOR THE CARRIER'),confidence:'Média'};
   }
-  return empty('CARRIER não localizado no BL. Verifique se a página digitalizada está legível.');
+  return empty('Agência marítima não identificada com segurança no campo CARRIER do BL.');
 }
 function importerCnpj(pages:PdfPage[]):Pick{
   for(const p of duimps(pages)){const m=all(p).match(/CNPJ\s+do\s+importador\s*:\s*(\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2})/i);if(m?.[1])return{value:m[1],source:source(p,'CNPJ do importador'),confidence:'Alta'}}
@@ -245,9 +247,10 @@ function noteTotal(pages:PdfPage[]):Pick{
   const motherNote=mother.length?' · NF mãe excluída: '+mother.map(i=>'Nº '+(i.number||'?')+' (R$ '+i.display+')').join(', '):'';
   const expected=Math.max(0,...expectedCounts);
   const missing=expected&&eligible.length<expected?' · ATENÇÃO: '+eligible.length+'/'+expected+' NFs filhotes identificadas; total parcial':'';
-  const comparison=mother.length&&(!expected||eligible.length===expected)?' · Conferência com NF mãe: '+(Math.abs(total-mother[0].value)<0.01?'valores conferem':'DIVERGÊNCIA entre soma das filhotes e NF mãe'):'';
+  const difference=mother.length>0 && Math.abs(total-mother[0].value)>=0.01;
+  const comparison=mother.length?(difference?' · NF mãe (conferência): R$ '+mother[0].display+' · Soma das NF filhotes: R$ '+formatBr(total,2)+' · Impostos NÃO calculados na soma das filhotes; diferença pode incluir tributos.':' · Conferência com NF mãe: valores conferem'):'';
   const src=classified||eligible.length>1?'Soma de '+eligible.length+' NFs únicas · '+parts.join(' + ')+motherNote+missing+comparison:source(eligible[0].page,'VALOR TOTAL DA NOTA');
-  return{value:formatBr(total,2),source:src,confidence:missing?'Baixa':mother.length&&comparison.includes('DIVERGÊNCIA')?'Baixa':'Alta'};
+  return{value:difference?'NF mãe: R$ '+mother[0].display+' | NF filhotes (sem impostos calculados): R$ '+formatBr(total,2):formatBr(total,2),source:src,confidence:missing?'Baixa':'Alta'};
 }
 function field(label:BrasalplaReportFieldLabel,pick:Pick):BrasalplaAnalysisField{return{label,value:pick.value||'—',source:pick.source,confidence:pick.confidence}}
 
