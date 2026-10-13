@@ -47,7 +47,7 @@ async function readPdf(file:File):Promise<PdfPage[]>{
     const page=await pdf.getPage(pageNumber),content=await page.getTextContent(),items=content.items as any[];
     const cells=itemsToCells(items);
     let rows=itemsToRows(items),flat=clean(items.filter(raw=>raw&&'str' in raw).map((raw:any)=>String(raw.str||'').trim()).filter(Boolean).join(' ')),ocr=false;
-    if((flat.replace(/\s/g,'').length<60 && (pageNumber<=2 || pdf.numPages<=3)) || (pageNumber===1 && /(?:BL|BOL|BILL|LADING)/i.test(file.name) && !/\bCARRIER\s*[:：-]/i.test(flat))){
+    if((flat.replace(/\s/g,'').length<60 && (pageNumber<=2 || pdf.numPages<=3)) || (pageNumber===1 && (/(?:BL|BOL|BILL|LADING)/i.test(file.name) || /BILL\s+OF\s+LADING/i.test(flat)) && !/\bCARRIER\s*[:：-]/i.test(flat))){
       try{const scanned=await ocrPage(page);if(scanned){flat=scanned;rows=scanned.split(/\r?\n/).map(clean).filter(Boolean);ocr=true}}catch{}
     }
     pages.push({filename:file.name,page:pageNumber,rows,text:clean(rows.join('\n')),flatText:flat,ocr,cells});
