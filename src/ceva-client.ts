@@ -22,7 +22,7 @@ function bindCeva(){
   card.innerHTML=`
     <span class="client-logo-image"><img src="${CEVA_PROFILE.logo}" alt="Logo ${CEVA_PROFILE.displayName}"></span>
     <strong>${CEVA_PROFILE.name}</strong>
-    <small>Lógica própria por cliente</small>
+
     <span class="client-capabilities" aria-label="Formatos aceitos"><span>PDFs</span></span>
   `;
   grid.appendChild(card);
