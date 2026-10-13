@@ -24,7 +24,7 @@ function bindXcmg(){
     <span class="client-logo-image"><img src="${XCMG_PROFILE.logo}" alt="Logo ${XCMG_PROFILE.displayName}"></span>
     <strong>${XCMG_PROFILE.name}</strong>
 
-    <span class="client-capabilities" aria-label="Formatos aceitos"><span>Excel obrigatório</span><span>NF ou ZIP</span></span>
+    <span class="client-capabilities" aria-label="Formatos aceitos"><span>Excel opcional</span><span>NF ou ZIP</span></span>
   `;
   grid.appendChild(card);
 
@@ -41,14 +41,14 @@ function bindXcmg(){
         <p>${XCMG_PROFILE.description}</p>
       </div>
     </div>
-    <div class="xcmg-mode-note"><b>PLANILHA OBRIGATÓRIA</b><span>Envie sempre a planilha Excel e escolha também uma NF Fiscal em PDF ou um pacote .ZIP. NF e ZIP continuam sendo modos alternativos.</span></div>
+    <div class="xcmg-mode-note"><b>PLANILHA OPCIONAL</b><span>Envie uma ou várias NFs em PDF ou um pacote ZIP. A planilha Excel pode ser adicionada para complementar os dados.</span></div>
     <div class="xcmg-upload-grid">
       <label class="client-upload-card xcmg-sheet-card">
         <input type="file" accept=".xlsx,.xls,.xlsm,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" data-xcmg-file="sheet" hidden>
         <button type="button" class="client-file-clear" data-xcmg-clear="sheet" aria-label="Remover planilha Excel">×</button>
         <span class="client-upload-icon">▦</span>
         <strong>PLANILHA EXCEL</strong>
-        <small class="client-required">Obrigatória em todas as análises</small>
+        <small class="client-required">Opcional · complementa os dados</small>
         <em>clique para selecionar</em>
       </label>
       <label class="client-upload-card xcmg-nf-card">
@@ -56,7 +56,7 @@ function bindXcmg(){
         <button type="button" class="client-file-clear" data-xcmg-clear="nf" aria-label="Remover NF Fiscal">×</button>
         <span class="client-upload-icon">▤</span>
         <strong>NF FISCAL</strong>
-        <small>Use junto com a planilha · aceita várias NFs</small>
+        <small>Aceita várias NFs · Excel opcional</small>
         <em>clique para selecionar</em>
       </label>
       <label class="client-upload-card xcmg-zip-card">
@@ -64,11 +64,11 @@ function bindXcmg(){
         <button type="button" class="client-file-clear" data-xcmg-clear="zip" aria-label="Remover pacote ZIP">×</button>
         <span class="client-upload-icon">▣</span>
         <strong>PACOTE .ZIP</strong>
-        <small>Use junto com a planilha</small>
+        <small>Excel opcional</small>
         <em>clique para selecionar</em>
       </label>
     </div>
-    <div class="client-mode-status xcmg-mode-status" aria-live="polite">Envie a planilha obrigatória e depois selecione NF ou ZIP.</div>
+    <div class="client-mode-status xcmg-mode-status" aria-live="polite">Selecione uma ou mais NFs em PDF ou um arquivo ZIP.</div>
     <button type="button" class="client-analyze-button xcmg-analyze-button" disabled>Analisar processo XCMG</button>
   `;
   content.appendChild(detail);
@@ -95,12 +95,10 @@ function bindXcmg(){
   const refresh=()=>{
     const sheet=sheetInput.files?.[0]||null,nfs=Array.from(nfInput.files||[]),zip=zipInput.files?.[0]||null;
     setCard(sheetInput);setCard(nfInput);setCard(zipInput);
-    if(!sheet&&!(nfs.length||zip))status.textContent='Envie a planilha obrigatória e depois selecione NF ou ZIP.';
-    else if(!sheet)status.textContent='Falta a planilha Excel obrigatória para liberar a análise.';
-    else if(!(nfs.length||zip))status.textContent=`Planilha selecionada: ${sheet.name}. Agora selecione uma ou mais NFs ou ZIP.`;
-    else if(zip)status.textContent=`Pronto: planilha ${sheet.name} + ZIP ${zip.name}.`;
-    else status.textContent=nfs.length===1?`Pronto: planilha ${sheet.name} + NF ${nfs[0].name}.`:`Pronto: planilha ${sheet.name} + ${nfs.length} NFs.`;
-    analyzeButton.disabled=!(sheet&&(nfs.length||zip));
+    if(!(nfs.length||zip))status.textContent='Selecione uma ou mais NFs em PDF ou um arquivo ZIP.';
+    else if(zip)status.textContent=sheet?`Pronto: planilha ${sheet.name} + ZIP ${zip.name}.`:`Pronto: ZIP ${zip.name}. Planilha opcional.`;
+    else status.textContent=sheet?`Pronto: planilha ${sheet.name} + ${nfs.length} NF(s).`:`Pronto: ${nfs.length} NF(s). Planilha opcional.`;
+    analyzeButton.disabled=!(nfs.length||zip);
   };
 
   sheetInput.addEventListener('change',refresh);
@@ -150,10 +148,10 @@ function bindXcmg(){
 
   analyzeButton.addEventListener('click',async()=>{
     const sheet=sheetInput.files?.[0]||null,nfs=Array.from(nfInput.files||[]),zip=zipInput.files?.[0]||null;
-    if(!sheet||!(nfs.length||zip)){refresh();return;}
+    if(!(nfs.length||zip)){refresh();return;}
     try{
-      analyzeButton.disabled=true;analyzeButton.textContent='Analisando processo XCMG...';status.textContent='Lendo e cruzando a planilha com os documentos da XCMG...';
-      const spreadsheet=await readXcmgSpreadsheet(sheet);
+      analyzeButton.disabled=true;analyzeButton.textContent='Analisando processo XCMG...';status.textContent=sheet?'Lendo a planilha e os documentos da XCMG...':'Lendo os PDFs da XCMG...';
+      const spreadsheet=sheet?await readXcmgSpreadsheet(sheet):null;
       const analysis=await runXcmgAnalysis({spreadsheet,nfs,zip});
       showReport(analysis);
     }catch(error){status.textContent=error instanceof Error?error.message:'Não foi possível concluir a análise XCMG.'}
