@@ -16,6 +16,7 @@ function bindBrasalpla(){
   card.innerHTML=`
     <span class="client-logo-image"><img src="${BRASALPLA_PROFILE.logo}" alt="Logo BRASALPLA"></span>
     <strong>BRASALPLA</strong>
+    <span class="client-capabilities" aria-label="Formatos aceitos"><span>PDFs</span></span>
   `;
   grid.appendChild(card);
 
@@ -28,9 +29,41 @@ function bindBrasalpla(){
       <span class="client-detail-logo client-detail-logo-image"><img src="${BRASALPLA_PROFILE.logo}" alt="Logo BRASALPLA"></span>
       <div><span class="clients-kicker">Processo por cliente</span><h2>BRASALPLA</h2><p>${BRASALPLA_PROFILE.description}</p></div>
     </div>
-    <div class="brasalpla-mode-note">Cliente cadastrado. Os formatos de arquivos e os campos do relatório serão configurados após a definição dos documentos BRASALPLA.</div>
+    <div class="brasalpla-mode-note">Envie um ou vários PDFs do processo BRASALPLA. Os campos de extração serão configurados exclusivamente para este cliente.</div>
+    <div class="brasalpla-upload-grid">
+      <label class="client-upload-card brasalpla-pdf-card">
+        <input type="file" accept="application/pdf,.pdf" data-brasalpla-file="pdfs" multiple hidden>
+        <button type="button" class="client-file-clear brasalpla-clear" aria-label="Remover PDFs" hidden>×</button>
+        <span class="client-upload-icon">▤</span>
+        <strong>DOCUMENTOS PDF</strong>
+        <small>Selecione um ou vários PDFs</small>
+        <em>clique para selecionar</em>
+      </label>
+    </div>
+    <div class="client-mode-status brasalpla-mode-status" aria-live="polite">Selecione os PDFs do processo BRASALPLA.</div>
+    <button type="button" class="client-analyze-button brasalpla-analyze-button" disabled>Analisar processo BRASALPLA</button>
   `;
   content.appendChild(detail);
+  const pdfInput=detail.querySelector<HTMLInputElement>('[data-brasalpla-file="pdfs"]')!;
+  const upload=detail.querySelector<HTMLElement>('.brasalpla-pdf-card')!;
+  const clear=detail.querySelector<HTMLButtonElement>('.brasalpla-clear')!;
+  const status=detail.querySelector<HTMLElement>('.brasalpla-mode-status')!;
+  const analyze=detail.querySelector<HTMLButtonElement>('.brasalpla-analyze-button')!;
+  const refresh=()=>{
+    const files=Array.from(pdfInput.files||[]);
+    upload.classList.toggle('selected',files.length>0);
+    clear.hidden=!files.length;
+    analyze.disabled=!files.length;
+    const display=upload.querySelector<HTMLElement>('em');
+    if(display)display.textContent=!files.length?'clique para selecionar':files.length===1?files[0].name:`${files.length} PDFs selecionados`;
+    status.textContent=!files.length?'Selecione os PDFs do processo BRASALPLA.':files.length===1?`PDF selecionado: ${files[0].name}`:`${files.length} PDFs selecionados.`;
+  };
+  pdfInput.addEventListener('change',refresh);
+  clear.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();pdfInput.value='';refresh()});
+  analyze.addEventListener('click',()=>{
+    status.textContent='PDFs selecionados. A extração ficará disponível após definirmos os campos do relatório BRASALPLA.';
+  });
+  refresh();
   const hideViews=()=>{
     panel.querySelectorAll<HTMLElement>('.clients-list-view,.client-detail-view,.client-report-view').forEach(view=>{
       view.classList.remove('active','leaving');view.setAttribute('aria-hidden','true');
@@ -38,7 +71,7 @@ function bindBrasalpla(){
     panel.classList.remove('report-mode');
   };
   const showList=()=>{hideViews();list.classList.add('active');list.setAttribute('aria-hidden','false')};
-  const showDetail=()=>{hideViews();detail.classList.add('active');detail.setAttribute('aria-hidden','false')};
+  const showDetail=()=>{hideViews();detail.classList.add('active');detail.setAttribute('aria-hidden','false');refresh()};
   card.addEventListener('click',showDetail);
   detail.querySelector('.brasalpla-back')?.addEventListener('click',showList);
   document.querySelector('.clients-tab')?.addEventListener('click',()=>detail.classList.remove('active'));
