@@ -1,4 +1,5 @@
 import { BRASALPLA_PROFILE } from './clients/brasalpla';
+import { BRASALPLA_REPORT_FIELDS } from './clients/brasalpla-report';
 export {};
 
 function bindBrasalpla(){
@@ -41,9 +42,13 @@ function bindBrasalpla(){
       </label>
     </div>
     <div class="client-mode-status brasalpla-mode-status" aria-live="polite">Selecione os PDFs do processo BRASALPLA.</div>
-    <button type="button" class="client-analyze-button brasalpla-analyze-button" disabled>Analisar processo BRASALPLA</button>
+    <button type="button" class="client-analyze-button brasalpla-analyze-button">Visualizar modelo de relatório</button>
   `;
   content.appendChild(detail);
+  const report=document.createElement('div');
+  report.className='client-report-view brasalpla-report-view';
+  report.setAttribute('aria-hidden','true');
+  content.appendChild(report);
   const pdfInput=detail.querySelector<HTMLInputElement>('[data-brasalpla-file="pdfs"]')!;
   const upload=detail.querySelector<HTMLElement>('.brasalpla-pdf-card')!;
   const clear=detail.querySelector<HTMLButtonElement>('.brasalpla-clear')!;
@@ -53,7 +58,7 @@ function bindBrasalpla(){
     const files=Array.from(pdfInput.files||[]);
     upload.classList.toggle('selected',files.length>0);
     clear.hidden=!files.length;
-    analyze.disabled=!files.length;
+    analyze.disabled=false;
     const display=upload.querySelector<HTMLElement>('em');
     if(display)display.textContent=!files.length?'clique para selecionar':files.length===1?files[0].name:`${files.length} PDFs selecionados`;
     status.textContent=!files.length?'Selecione os PDFs do processo BRASALPLA.':files.length===1?`PDF selecionado: ${files[0].name}`:`${files.length} PDFs selecionados.`;
@@ -61,7 +66,33 @@ function bindBrasalpla(){
   pdfInput.addEventListener('change',refresh);
   clear.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();pdfInput.value='';refresh()});
   analyze.addEventListener('click',()=>{
-    status.textContent='PDFs selecionados. A extração ficará disponível após definirmos os campos do relatório BRASALPLA.';
+    const rows=BRASALPLA_REPORT_FIELDS.map(label=>`
+      <div class="client-report-row">
+        <div class="client-report-field"><b>${label}</b><span>Extração BRASALPLA ainda não configurada</span></div>
+        <div class="client-report-value">—</div>
+        <div class="client-report-confidence">Pendente</div>
+      </div>`).join('');
+    report.innerHTML=`
+      <div class="client-report-toolbar"><button type="button" class="client-report-back brasalpla-report-back">← BRASALPLA</button></div>
+      <div class="client-report-head">
+        <span class="client-report-logo"><img src="${BRASALPLA_PROFILE.logo}" alt="Logo BRASALPLA"></span>
+        <div><span class="clients-kicker">Modelo de relatório por cliente</span><h2>Relatório BRASALPLA</h2>
+          <p>Modelo com 14 campos, igual à CEVA. <b>Nenhum PDF foi analisado.</b></p></div>
+      </div>
+      <div class="client-report-metrics">
+        <div><span>Cliente</span><b>BRASALPLA</b></div>
+        <div><span>Operação</span><b>Não identificada</b></div>
+        <div><span>Campos</span><b>0/14</b></div>
+      </div>
+      <div class="client-report-table">${rows}</div>
+      <button type="button" class="client-report-new brasalpla-report-new">Voltar para BRASALPLA</button>
+    `;
+    hideViews();
+    panel.classList.add('report-mode');
+    report.classList.add('active');
+    report.setAttribute('aria-hidden','false');
+    report.querySelector('.brasalpla-report-back')?.addEventListener('click',showDetail);
+    report.querySelector('.brasalpla-report-new')?.addEventListener('click',showDetail);
   });
   refresh();
   const hideViews=()=>{
