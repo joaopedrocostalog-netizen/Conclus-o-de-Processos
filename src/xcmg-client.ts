@@ -23,7 +23,7 @@ function bindXcmg(){
   card.innerHTML=`
     <span class="client-logo-image"><img src="${XCMG_PROFILE.logo}" alt="Logo ${XCMG_PROFILE.displayName}"></span>
     <strong>${XCMG_PROFILE.name}</strong>
-    <small>Lógica própria por cliente</small>
+
     <span class="client-capabilities" aria-label="Formatos aceitos"><span>Excel obrigatório</span><span>NF ou ZIP</span></span>
   `;
   grid.appendChild(card);
