@@ -2,3 +2,7 @@
 .brasalpla-upload-grid{display:grid;grid-template-columns:1fr;gap:12px;margin-top:12px}
 .brasalpla-upload-grid .client-upload-card{min-height:170px}
 .brasalpla-mode-status{margin-top:12px}
+
+.brasalpla-nf-comparison{display:flex;gap:10px;flex-wrap:wrap;align-items:stretch}
+.brasalpla-nf-comparison span{flex:1 1 175px;border:1px solid #ead5d9;background:#fff8fa;border-radius:9px;padding:9px 11px;line-height:1.5}
+.brasalpla-tax-warning{display:block;margin-top:7px;color:#9e4a16;font-size:11px;font-weight:700;line-height:1.45}
