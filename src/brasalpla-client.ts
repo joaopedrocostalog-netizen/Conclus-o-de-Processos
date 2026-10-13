@@ -90,7 +90,7 @@ function bindBrasalpla(){
     const rows=analysis.fields.map(field=>`
       <div class="client-report-row">
         <div class="client-report-field"><b>${escapeHtml(field.label)}</b><span>${escapeHtml(field.source)}</span></div>
-        <div class="client-report-value">${escapeHtml(field.value)}</div>
+        <div class="client-report-value">${field.label==='Valor Total da Nota'&&field.value.includes(' | ')?`<div class="brasalpla-nf-comparison">${field.value.split(' | ').map(value=>`<span>${escapeHtml(value)}</span>`).join('')}</div><small class="brasalpla-tax-warning">A soma das NF filhotes não inclui cálculo de impostos.</small>`:escapeHtml(field.value)}</div>
         <div class="client-report-confidence">${escapeHtml(field.confidence)}</div>
       </div>`).join('');
 
