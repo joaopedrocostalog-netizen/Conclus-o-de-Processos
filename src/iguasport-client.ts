@@ -22,7 +22,7 @@ function bindIguasport(){
   card.innerHTML=`
     <span class="client-logo-image"><img src="${IGUASPORT_PROFILE.logo}" alt="Logo ${IGUASPORT_PROFILE.displayName}"></span>
     <strong>${IGUASPORT_PROFILE.name}</strong>
-    <small>Lógica própria por cliente</small>
+
     <span class="client-capabilities" aria-label="Formatos aceitos"><span>Vários PDFs</span><span>ZIP</span></span>
   `;
   grid.appendChild(card);
