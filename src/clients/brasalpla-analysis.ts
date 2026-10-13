@@ -169,13 +169,13 @@ function containers(pages:PdfPage[]):Pick{
   }
   if(found.size)return{value:[...found.keys()].join(', '),source:[...new Set([...found.values()].map(p=>source(p,'NRO. · contêineres')))].join(' + '),confidence:'Alta'};
 
-  const found:Array<{value:string;page:PdfPage}>=[];
+  const fallbackFound:Array<{value:string;page:PdfPage}>=[];
   for(const p of duimps(pages)){
     const text=all(p),block=text.match(/CONTEINERES\.*\s*:\s*(.+?)(?=\s+(?:ESPECIE|LOCAL\s+DE\s+EMBARQUE|VE[IÍ]CULO|$))/i)?.[1]||'';
-    for(const m of block.matchAll(/\b([A-Z]{4})[- .]?(\d{3})[- .]?(\d{3})[- .]?(\d)\b/g))found.push({value:`${m[1]}${m[2]}${m[3]}${m[4]}`,page:p});
+    for(const m of block.matchAll(/\b([A-Z]{4})[- .]?(\d{3})[- .]?(\d{3})[- .]?(\d)\b/g))fallbackFound.push({value:`${m[1]}${m[2]}${m[3]}${m[4]}`,page:p});
   }
-  if(!found.length)for(const p of bls(pages))for(const m of all(p).matchAll(/\b([A-Z]{4})\s*(\d{7})\b/g))found.push({value:`${m[1]}${m[2]}`,page:p});
-  const unique=[...new Map(found.map(item=>[item.value,item])).values()];
+  if(!fallbackFound.length)for(const p of bls(pages))for(const m of all(p).matchAll(/\b([A-Z]{4})\s*(\d{7})\b/g))fallbackFound.push({value:`${m[1]}${m[2]}`,page:p});
+  const unique=[...new Map(fallbackFound.map(item=>[item.value,item])).values()];
   if(!unique.length)return empty('Contêineres não localizados.');
   const src=unique.length===1?source(unique[0].page,'CONTEINERES'):`PDFs · ${unique.map(i=>`${i.page.filename} · página ${i.page.page} · ${i.value}`).join(' + ')} · contêineres`;
   return{value:unique.map(i=>i.value).join(', '),source:src,confidence:'Alta'};
@@ -186,9 +186,9 @@ function weight(pages:PdfPage[]):Pick{
     const text=all(p),m=text.match(/Peso\s+L[ií]quido\s*\(kg\)\s*:\s*([\d.]+,\d{3,5})/i);if(!m?.[1])continue;
     const value=brNumber(m[1]);if(value===null)continue;
     const doc=text.match(/Extrato\s+da\s+Duimp\s+([0-9]{2}BR[0-9-]+)/i)?.[1]||p.filename;
-    found.push({key:norm(doc),value,display:m[1],page:p});
+    fallbackFound.push({key:norm(doc),value,display:m[1],page:p});
   }
-  const unique=[...new Map(found.map(x=>[x.key,x])).values()];
+  const unique=[...new Map(fallbackFound.map(x=>[x.key,x])).values()];
   if(!unique.length)return empty('Peso Líquido não localizado no Extrato da DUIMP.');
   const total=unique.reduce((a,b)=>a+b.value,0);
   const src=unique.length===1?source(unique[0].page,'Peso Líquido (kg)'):`Soma de ${unique.length} Extratos DUIMP únicos · ${unique.map(i=>`${i.page.filename} · página ${i.page.page} · ${i.display}`).join(' + ')}`;
@@ -231,9 +231,9 @@ function noteTotal(pages:PdfPage[]):Pick{
     }
     if(!display)continue;
     const value=brNumber(display);if(value===null)continue;
-    found.push({key:nfeKey(p,display),value,display,page:p});
+    fallbackFound.push({key:nfeKey(p,display),value,display,page:p});
   }
-  const unique=[...new Map(found.map(x=>[x.key,x])).values()];
+  const unique=[...new Map(fallbackFound.map(x=>[x.key,x])).values()];
   if(!unique.length)return empty('Valor Total da Nota não localizado com segurança na célula VALOR TOTAL DA NOTA da NF.');
   const total=unique.reduce((sum,item)=>sum+item.value,0);
   const src=unique.length===1?source(unique[0].page,'VALOR TOTAL DA NOTA'):`Soma de ${unique.length} NFs únicas · ${unique.map(item=>`${item.page.filename} · página ${item.page.page} · R$ ${item.display}`).join(' + ')}`;
