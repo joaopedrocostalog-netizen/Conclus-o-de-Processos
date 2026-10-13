@@ -70,23 +70,10 @@ function formatBr(value:number,decimals:number){return new Intl.NumberFormat('pt
 
 function client(pages:PdfPage[]):Pick{
   for(const p of duimps(pages)){
-    const m=all(p).match(/Nome\s+do\s+importador\s*:\s*([^\n]{6,120})/i);
-    if(m?.[1])return{value:one(m[1]).split(/\s+(?:Endere[cç]o|CNPJ|Informa[cç])/i)[0],source:source(p,'Nome do importador'),confidence:'Alta'};
+    const value=capture(all(p),/Nome\s+do\s+importador\s*:\s*(.+?)(?=\s+(?:Endere[cç]o\s+do\s+importador|Informa[cç][oõ]es\s+Complementares|CNPJ\s+do\s+importador|$))/i);
+    if(value)return{value,source:source(p,'Nome do importador'),confidence:'Alta'};
   }
-
-  for(const p of nfs(pages)){
-    const heading=p.cells.find(cell=>/TRANSPORTADOR\s*\/\s*VOLUMES\s+TRANSPORTADOS/i.test(cell.str));
-    const label=p.cells.find(cell=>/RAZ[AÃ]O/i.test(cell.str)&&p.cells.some(other=>/SOCIAL/i.test(other.str)&&Math.abs(other.y-cell.y)<3&&other.x>=cell.x&&other.x-cell.x<90)&&(!heading||cell.y<heading.y&&heading.y-cell.y<65));
-    if(!label)continue;
-    const candidates=p.cells.filter(cell=>cell.y<label.y-2&&label.y-cell.y<23&&cell.x<label.x+210&&cell.x>=label.x-12&&cell.str.length>2&&!/^(?:FRETE|CNPJ|ENDERE[CÇ]O|C[ÓO]DIGO)/i.test(cell.str))
-      .sort((a,b)=>Math.abs(label.y-a.y)-Math.abs(label.y-b.y)||a.x-b.x);
-    if(candidates.length){
-      const base=candidates[0],sameRow=p.cells.filter(cell=>Math.abs(cell.y-base.y)<2&&cell.x>=label.x-12&&cell.x<label.x+230).sort((a,b)=>a.x-b.x);
-      const value=sameRow.map(cell=>cell.str).join(' ').trim();
-      if(value.length>3&&!/RAZ[AÃ]O SOCIAL/i.test(value))return{value,source:source(p,'TRANSPORTADOR/VOLUMES TRANSPORTADOS · RAZÃO SOCIAL'),confidence:'Alta'};
-    }
-  }
-  return empty('Cliente não localizado no campo RAZÃO SOCIAL do Transportador da NF.');
+  return empty('Cliente não localizado no campo Nome do importador do Extrato DUIMP.');
 }
 function docType(pages:PdfPage[]):Pick{for(const p of duimps(pages))return{value:'DUIMP',source:source(p,'Extrato da DUIMP'),confidence:'Alta'};return empty('Tipo Documento não localizado.')}
 function exporter(pages:PdfPage[]):Pick{
@@ -134,6 +121,10 @@ function refClient(pages:PdfPage[]):Pick{
 }
 function documentNumber(pages:PdfPage[]):Pick{
   for(const p of duimps(pages)){const m=all(p).match(/Extrato\s+da\s+Duimp\s+([0-9]{2}BR[0-9-]+)/i);if(m?.[1])return{value:m[1],source:source(p,'título do Extrato da DUIMP'),confidence:'Alta'}}
+  for(const p of nfs(pages)){
+    const match=all(p).match(/\b(?:N[º°.]|NÚMERO)\s*0*(\d{5,12})\b/i);
+    if(match?.[1])return{value:match[1],source:source(p,'Número da NF'),confidence:'Média'};
+  }
   return empty('Nº Documento não localizado.');
 }
 function importer(pages:PdfPage[]):Pick{
@@ -158,6 +149,10 @@ function vessel(pages:PdfPage[]):Pick{
 }
 function importerCnpj(pages:PdfPage[]):Pick{
   for(const p of duimps(pages)){const m=all(p).match(/CNPJ\s+do\s+importador\s*:\s*(\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2})/i);if(m?.[1])return{value:m[1],source:source(p,'CNPJ do importador'),confidence:'Alta'}}
+  for(const p of nfs(pages)){
+    const match=all(p).match(/CNPJ\s*\/\s*CPF\s*[:\s]*(\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2})/i);
+    if(match?.[1])return{value:match[1],source:source(p,'CNPJ/CPF · emitente da NF'),confidence:'Média'};
+  }
   return empty('CNPJ do Cliente / Importador não localizado.');
 }
 function containers(pages:PdfPage[]):Pick{
