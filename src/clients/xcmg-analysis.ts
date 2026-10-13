@@ -188,13 +188,13 @@ function containers(sheet:XcmgSpreadsheetSnapshot):Pick{
 }
 function toField(label:XcmgReportFieldLabel,pick:Pick):XcmgAnalysisField{return{label,value:pick.value||'—',source:pick.source,confidence:pick.confidence}}
 
-export async function runXcmgAnalysis(args:{spreadsheet:XcmgSpreadsheetSnapshot|null;nfs:File[];zip:File|null}):Promise<XcmgAnalysisSnapshot>{
+export async function runXcmgAnalysis(args:{spreadsheet:XcmgSpreadsheetSnapshot;nfs:File[];zip:File|null}):Promise<XcmgAnalysisSnapshot>{
   const pages=await readSupport(args.nfs,args.zip);const client=clientName(pages);
   const picks:Record<XcmgReportFieldLabel,Pick>={
     'Cliente':client,
     'Tipo Documento':{value:'DUIMP',source:'Regra exclusiva XCMG · tipo de documento definido para este cliente',confidence:'Alta'},
     'Remetente / Exportador':exporter(pages),
-    'Nº BL / AWB':args.spreadsheet?blNumber(args.spreadsheet):empty('Nº BL / AWB: envie uma planilha para consultar este campo.'),
+    'Nº BL / AWB':blNumber(args.spreadsheet),
     'Local de Armazenagem':storage(pages),
     'Ref. do Cliente':clientRef(pages),
     'Nº Documento':declaration(pages),
@@ -202,7 +202,7 @@ export async function runXcmgAnalysis(args:{spreadsheet:XcmgSpreadsheetSnapshot|
     'Operação Marítima':{value:'Importação',source:'Regra exclusiva XCMG · operação definida para este cliente',confidence:'Alta'},
     'Agência Marítima':{value:'—',source:'Campo ainda não configurado na lógica XCMG',confidence:'Baixa'},
     'CNPJ do Cliente / Importador':importerCnpj(pages),
-    'Contêineres':args.spreadsheet?containers(args.spreadsheet):empty('Contêineres: envie uma planilha para consultar este campo.'),
+    'Contêineres':containers(args.spreadsheet),
     'Peso Líquido':netWeight(pages),
     'Valor Total da Nota':noteValue(pages)
   };
