@@ -166,7 +166,7 @@ function containers(pages:PdfPage[]):Pick{
       found.set(`${m[1].toUpperCase()}${m[2]}${m[3]}${m[4]}`,p);
     }
   }
-  if(found.size)return{value:[...found.keys()].join(', '),source:[...new Set([...found.values()].map(p=>source(p,'NRO. · contêineres')))].join(' + '),confidence:'Alta'};
+  if(found.size){const entries=[...found.entries()];const first=entries[0][1];const single=entries.every(([,p])=>p.filename===first.filename&&p.page===first.page);const src=single?source(first,'NRO. · contêineres'):`PDFs · ${entries.map(([value,p])=>`${p.filename} · página ${p.page} · ${value}`).join(' + ')} · contêineres identificados`;return{value:entries.map(([value])=>value).join(', '),source:src,confidence:'Alta'};}
 
   const fallbackFound:Array<{value:string;page:PdfPage}>=[];
   for(const p of duimps(pages)){
