@@ -46,7 +46,7 @@ const ensureClientsTab = () => {
       <button type="button" class="client-card client-card-glovis" aria-label="Abrir cliente ${GLOVIS_PROFILE.name}">
         <span class="client-logo-image"><img src="${GLOVIS_PROFILE.logo}" alt="Logo ${GLOVIS_PROFILE.displayName}"></span>
         <strong>${GLOVIS_PROFILE.name}</strong>
-        <small>Base de leitura validada</small>
+
       </button>
     </div>
   `;
