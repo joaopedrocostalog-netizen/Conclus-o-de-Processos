@@ -20,7 +20,7 @@ const empty=(why:string):Pick=>({value:null,source:why,confidence:'Baixa'});
 const source=(p:PdfPage,note:string)=>`PDF · ${p.filename} · página ${p.page} · ${note}`;
 
 let workerPromise:Promise<any>|null=null;
-function getWorker(){return workerPromise||(workerPromise=createWorker('eng+por'))}
+function getWorker(){return workerPromise||(workerPromise=createWorker('eng'))}
 
 function itemsToCells(items:any[]):Cell[]{return items.filter(raw=>raw&&'str' in raw&&String(raw.str||'').trim()).map((raw:any)=>({str:String(raw.str||'').trim(),x:Number(raw.transform?.[4]||0),y:Number(raw.transform?.[5]||0),w:Number(raw.width||0),h:Number(raw.height||0)}))}
 function itemsToRows(items:any[]):string[]{
@@ -31,7 +31,7 @@ function itemsToRows(items:any[]):string[]{
 }
 
 async function ocrPage(page:any){
-  const viewport=page.getViewport({scale:2});
+  const viewport=page.getViewport({scale:1.45});
   const canvas=document.createElement('canvas');canvas.width=Math.ceil(viewport.width);canvas.height=Math.ceil(viewport.height);
   const ctx=canvas.getContext('2d');if(!ctx)return'';
   await page.render({canvas,canvasContext:ctx,viewport}).promise;
@@ -47,19 +47,19 @@ async function readPdf(file:File):Promise<PdfPage[]>{
     const page=await pdf.getPage(pageNumber),content=await page.getTextContent(),items=content.items as any[];
     const cells=itemsToCells(items);
     let rows=itemsToRows(items),flat=clean(items.filter(raw=>raw&&'str' in raw).map((raw:any)=>String(raw.str||'').trim()).filter(Boolean).join(' ')),ocr=false;
-    if(flat.replace(/\s/g,'').length<60){
+    if(flat.replace(/\s/g,'').length<60 && (pageNumber<=2 || pdf.numPages<=3)){
       try{const scanned=await ocrPage(page);if(scanned){flat=scanned;rows=scanned.split(/\r?\n/).map(clean).filter(Boolean);ocr=true}}catch{}
     }
     pages.push({filename:file.name,page:pageNumber,rows,text:clean(rows.join('\n')),flatText:flat,ocr,cells});
   }
   return pages;
 }
-async function readPdfs(files:File[]){const out:PdfPage[]=[];for(const file of files)out.push(...await readPdf(file));return out}
+async function readPdfs(files:File[]){const perFile=await Promise.all(files.map(readPdf));return perFile.flat()}
 
 const all=(p:PdfPage)=>one(`${p.text} ${p.flatText}`);
 const isNfe=(p:PdfPage)=>/\bDANFE\b|NOTA FISCAL ELETR[OÔ]NICA|VALOR TOTAL DA NOTA|CHAVE DE ACESSO/i.test(all(p));
 const isDuimp=(p:PdfPage)=>/EXTRATO\s+DA\s+DUIMP|NOME\s+DO\s+IMPORTADOR|SITUA[CÇ][AÃ]O\s+DA\s+DUIMP/i.test(all(p));
-const isBl=(p:PdfPage)=>/BILL\s+OF\s+LADING|B\/?L-?NO|SHIPPER|CONSIGNEE|VESSEL|VOYAGE/i.test(all(p));
+const isBl=(p:PdfPage)=>/BILL\s+OF\s+LADING|B\/?L-?NO|SHIPPER|CONSIGNEE|VESSEL|VOYAGE|CARRIER\s*:/i.test(all(p))||/\b(?:BL|BOL|LADING)\b/i.test(p.filename);
 const nfs=(pages:PdfPage[])=>pages.filter(isNfe);
 const duimps=(pages:PdfPage[])=>pages.filter(isDuimp);
 const bls=(pages:PdfPage[])=>pages.filter(isBl);
@@ -134,18 +134,22 @@ function importer(pages:PdfPage[]):Pick{
 function operation(pages:PdfPage[]):Pick{for(const p of duimps(pages))return{value:'Importação',source:source(p,'operação identificada pelo Extrato da DUIMP'),confidence:'Alta'};return empty('Operação não identificada.')}
 function vessel(pages:PdfPage[]):Pick{
   for(const p of bls(pages)){
-    const text=p.text;
-    const patterns=[
-      /(?:^|\n)\s*Carrier\s*:\s*([^\n]{5,100})/im,
-      /Carrier\s*:\s*(.+?)(?=\s+(?:Bill\s+of\s+Lading|Shipper|Consignee|$))/i
-    ];
-    for(const pattern of patterns){
-      const m=text.match(pattern),value=m?.[1]?.trim();
-      if(value&&value.length>4&&!/BILL\s+OF\s+LADING|SHIPPER/i.test(value))
-        return{value,source:source(p,'Carrier · cabeçalho do Bill of Lading'),confidence:'Alta'};
+    const texts=[...p.rows,p.text,p.flatText];
+    for(const text of texts){
+      // The scanned CMA CGM B/L has the carrier in a compact inline label.
+      const match=text.match(/\bCARRIER\s*[:：\-]?\s*(CMA\s*CGM|[A-Z][A-Z0-9.&\-]*(?:\s+[A-Z][A-Z0-9.&\-]*){0,5})(?=\s|$)/i);
+      if(match?.[1]){
+        let value=one(match[1]);
+        if(/^CMA\s*CGM/i.test(value))value='CMA CGM';
+        if(!/^(?:SHIPPER|CONSIGNEE|NOTIFY|THE|VESSEL)$/i.test(value))
+          return{value,source:source(p,'CARRIER · Bill of Lading'),confidence:'Alta'};
+      }
     }
+    const blText=all(p);
+    if(/\bCMA\s*CGM\b/i.test(blText)&&/BILL\s+OF\s+LADING|CARRIER|VOYAGE/i.test(blText))
+      return{value:'CMA CGM',source:source(p,'CMA CGM · Carrier do Bill of Lading'),confidence:'Média'};
   }
-  return empty('Agência Marítima não localizada no campo Carrier do BL.');
+  return empty('CARRIER não localizado no BL. Verifique se a página digitalizada está legível.');
 }
 function importerCnpj(pages:PdfPage[]):Pick{
   for(const p of duimps(pages)){const m=all(p).match(/CNPJ\s+do\s+importador\s*:\s*(\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2})/i);if(m?.[1])return{value:m[1],source:source(p,'CNPJ do importador'),confidence:'Alta'}}
