@@ -86,7 +86,7 @@ function formatBr(value:number,decimals:number){return new Intl.NumberFormat('pt
 function client(pages:PdfPage[]):Pick{
   for(const p of nfs(pages)){
     const heading=p.cells.find(cell=>/TRANSPORTADOR\s*\/\s*VOLUMES\s+TRANSPORTADOS/i.test(cell.str));
-    const label=p.cells.find(cell=>/RAZ[AÃ]O\s+SOCIAL/i.test(cell.str)&&(!heading||cell.y<heading.y&&heading.y-cell.y<65));
+    const label=p.cells.find(cell=>/RAZ[AÃ]O/i.test(cell.str)&&p.cells.some(other=>/SOCIAL/i.test(other.str)&&Math.abs(other.y-cell.y)<3&&other.x>=cell.x&&other.x-cell.x<90)&&(!heading||cell.y<heading.y&&heading.y-cell.y<65));
     if(!label)continue;
     const candidates=p.cells.filter(cell=>cell.y<label.y-2&&label.y-cell.y<23&&cell.x<label.x+210&&cell.x>=label.x-12&&cell.str.length>2&&!/^(?:FRETE|CNPJ|ENDERE[CÇ]O|C[ÓO]DIGO)/i.test(cell.str))
       .sort((a,b)=>Math.abs(label.y-a.y)-Math.abs(label.y-b.y)||a.x-b.x);
