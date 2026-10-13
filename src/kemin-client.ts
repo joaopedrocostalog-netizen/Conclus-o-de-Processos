@@ -22,7 +22,7 @@ function bindKemin(){
   card.innerHTML=`
     <span class="client-logo-image"><img src="${KEMIN_PROFILE.logo}" alt="Logo ${KEMIN_PROFILE.displayName}"></span>
     <strong>${KEMIN_PROFILE.name}</strong>
-    <small>Lógica própria por cliente</small>
+
     <span class="client-capabilities" aria-label="Formatos aceitos"><span>PDFs</span></span>
   `;
   grid.appendChild(card);
