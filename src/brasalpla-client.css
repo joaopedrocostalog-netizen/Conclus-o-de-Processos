@@ -1,1 +1,4 @@
 .brasalpla-detail-view .client-detail-logo-image{width:126px;height:78px}.brasalpla-detail-view .client-detail-logo-image img{object-fit:contain}.brasalpla-mode-note{padding:16px;border:1px solid #e7e7e7;background:#fafafa;border-radius:12px;color:#777;font:12px/1.5 Arial,Helvetica,sans-serif}.client-card-brasalpla .client-logo-image img{object-fit:contain;object-position:center}
+.brasalpla-upload-grid{display:grid;grid-template-columns:1fr;gap:12px;margin-top:12px}
+.brasalpla-upload-grid .client-upload-card{min-height:170px}
+.brasalpla-mode-status{margin-top:12px}
