@@ -197,24 +197,35 @@ function nfeKey(p:PdfPage,value:string){
 function noteTotal(pages:PdfPage[]):Pick{
   const found:Array<{key:string;value:number;display:string;page:PdfPage}>=[];
   for(const p of nfs(pages)){
-    const noteTokens=p.cells.filter(cell=>/^NOTA$/i.test(cell.str.trim()));
-    const labels=noteTokens.filter(note=>p.cells.some(cell=>/TOTAL/i.test(cell.str)&&Math.abs(cell.y-note.y)<3&&cell.x<note.x&&note.x-cell.x<95));
+    // PDF coordinates: x grows rightward; y grows upward. Restrict values to the
+    // physical DANFE cell underneath the exact VALOR TOTAL DA NOTA label.
+    const token=(s:string)=>norm(s).replace(/[^A-Z0-9]/g,'');
+    const labels=p.cells.filter(cell=>token(cell.str).includes('VALORTOTALDANOTA'));
+    const splitLabels=p.cells.filter(cell=>token(cell.str)==='NOTA'&&p.cells.some(other=>
+      /TOTAL/.test(token(other.str))&&Math.abs(other.y-cell.y)<3&&other.x<cell.x&&cell.x-other.x<125));
+    const anchors=labels.length?labels:splitLabels;
     let display:string|null=null;
-    for(const label of labels.sort((a,b)=>a.y-b.y)){
-      const hits=p.cells.filter(cell=>label.y-cell.y>=2&&label.y-cell.y<25&&cell.x>=label.x-135&&cell.x<=label.x+40&&/^\d[\d.]*,\d{2}$/.test(cell.str.trim()))
-        .sort((a,b)=>Math.abs(label.y-a.y)-Math.abs(label.y-b.y)||b.x-a.x);
-      if(hits.length){display=hits[0].str.trim();break}
+    for(const label of anchors){
+      const anchorX=label.x;
+      const valueCandidates=p.cells.filter(cell=>{
+        if(!/^\s*(?:R\$\s*)?\d[\d.]*,\d{2}\s*$/.test(cell.str))return false;
+        const verticalGap=label.y-cell.y;
+        return verticalGap>2&&verticalGap<24&&cell.x>=anchorX-28&&cell.x<=anchorX+175;
+      }).sort((a,b)=>Math.abs(label.y-a.y)-Math.abs(label.y-b.y)||b.x-a.x);
+      if(valueCandidates.length){display=valueCandidates[0].str.replace(/R\$\s*/,'').trim();break}
     }
+    // Only use fallback if a whole text row explicitly joins this label and its value.
+    // Never use a nearby unlabeled tax amount or a generic 'total' on the page.
     if(!display){
-      const rs=p.rows,ix=rs.findIndex(row=>/VALOR\s+TOTAL\s+DA\s+NOTA/i.test(row));
-      if(ix>=0){const m=rs.slice(ix,ix+3).join(' ').match(/VALOR\s+TOTAL\s+DA\s+NOTA\s+([\d.]+,\d{2})/i);display=m?.[1]||null}
+      const exact=p.rows.map(row=>row.match(/VALOR\s+TOTAL\s+DA\s+NOTA\s*[:\-]?\s*(\d[\d.]*,\d{2})(?:\s|$)/i)?.[1]).find(Boolean);
+      display=exact||null;
     }
     if(!display)continue;
     const value=brNumber(display);if(value===null)continue;
     found.push({key:nfeKey(p,display),value,display,page:p});
   }
   const unique=[...new Map(found.map(x=>[x.key,x])).values()];
-  if(!unique.length)return empty('Valor Total da Nota não localizado no quadro VALOR TOTAL DA NOTA da NF.');
+  if(!unique.length)return empty('Valor Total da Nota não localizado com segurança na célula VALOR TOTAL DA NOTA da NF.');
   const total=unique.reduce((sum,item)=>sum+item.value,0);
   const src=unique.length===1?source(unique[0].page,'VALOR TOTAL DA NOTA'):`Soma de ${unique.length} NFs únicas · ${unique.map(item=>`${item.page.filename} · página ${item.page.page} · R$ ${item.display}`).join(' + ')}`;
   return{value:formatBr(total,2),source:src,confidence:'Alta'};
