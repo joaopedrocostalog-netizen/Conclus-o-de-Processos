@@ -47,7 +47,7 @@ async function readPdf(file:File):Promise<PdfPage[]>{
     const page=await pdf.getPage(pageNumber),content=await page.getTextContent(),items=content.items as any[];
     const cells=itemsToCells(items);
     let rows=itemsToRows(items),flat=clean(items.filter(raw=>raw&&'str' in raw).map((raw:any)=>String(raw.str||'').trim()).filter(Boolean).join(' ')),ocr=false;
-    if(flat.replace(/\s/g,'').length<60 && (pageNumber<=2 || pdf.numPages<=3)){
+    if((flat.replace(/\s/g,'').length<60 && (pageNumber<=2 || pdf.numPages<=3)) || (pageNumber===1 && /(?:BL|BOL|BILL|LADING)/i.test(file.name) && !/\bCARRIER\s*[:：-]/i.test(flat))){
       try{const scanned=await ocrPage(page);if(scanned){flat=scanned;rows=scanned.split(/\r?\n/).map(clean).filter(Boolean);ocr=true}}catch{}
     }
     pages.push({filename:file.name,page:pageNumber,rows,text:clean(rows.join('\n')),flatText:flat,ocr,cells});
@@ -203,40 +203,51 @@ function nfeKey(p:PdfPage,value:string){
   return`${number}:${value}`;
 }
 function noteTotal(pages:PdfPage[]):Pick{
-  const found:Array<{key:string;value:number;display:string;page:PdfPage}>=[];
+  type Invoice={key:string;number:string;value:number;display:string;page:PdfPage;kind:'mae'|'filhote'|'indefinida'};
+  const found:Invoice[]=[];
+  const allText=pages.map(p=>all(p)).join(' ');
+  const normalized=norm(allText);
+  const motherNumbers=new Set<string>();
+  for(const match of normalized.matchAll(/(?:NOTA\s+FISCAL\s+M[AÃ]E|NF\s+M[AÃ]E)\s*(?:N[ºO.]?\s*)?0*(\d{5,12})/gi))motherNumbers.add(match[1]);
+  const expectedCounts=[...normalized.matchAll(/(?:NF\s+)?FILHOT[EA]\s*(\d{1,3})\s*\/\s*(\d{1,3})/gi)].map(m=>Number(m[2]));
   for(const p of nfs(pages)){
-    // PDF coordinates: x grows rightward; y grows upward. Restrict values to the
-    // physical DANFE cell underneath the exact VALOR TOTAL DA NOTA label.
-    const token=(s:string)=>norm(s).replace(/[^A-Z0-9]/g,'');
+    const text=all(p),token=(v:string)=>norm(v).replace(/[^A-Z0-9]/g,'');
     const labels=p.cells.filter(cell=>token(cell.str).includes('VALORTOTALDANOTA'));
-    const splitLabels=p.cells.filter(cell=>token(cell.str)==='NOTA'&&p.cells.some(other=>
-      /TOTAL/.test(token(other.str))&&Math.abs(other.y-cell.y)<3&&other.x<cell.x&&cell.x-other.x<125));
+    const splitLabels=p.cells.filter(cell=>token(cell.str)==='NOTA'&&p.cells.some(other=>/TOTAL/.test(token(other.str))&&Math.abs(other.y-cell.y)<3&&other.x<cell.x&&cell.x-other.x<125));
     const anchors=labels.length?labels:splitLabels;
     let display:string|null=null;
     for(const label of anchors){
-      const anchorX=label.x;
-      const valueCandidates=p.cells.filter(cell=>{
-        if(!/^\s*(?:R\$\s*)?\d[\d.]*,\d{2}\s*$/.test(cell.str))return false;
-        const verticalGap=label.y-cell.y;
-        return verticalGap>2&&verticalGap<24&&cell.x>=anchorX-28&&cell.x<=anchorX+175;
-      }).sort((a,b)=>Math.abs(label.y-a.y)-Math.abs(label.y-b.y)||b.x-a.x);
-      if(valueCandidates.length){display=valueCandidates[0].str.replace(/R\$\s*/,'').trim();break}
+      const values=p.cells.filter(cell=>/^\s*(?:R\$\s*)?\d[\d.]*,\d{2}\s*$/.test(cell.str)&&label.y-cell.y>2&&label.y-cell.y<24&&cell.x>=label.x-28&&cell.x<=label.x+175)
+        .sort((a,b)=>Math.abs(label.y-a.y)-Math.abs(label.y-b.y)||b.x-a.x);
+      if(values.length){display=values[0].str.replace(/R\$\s*/,'').trim();break}
     }
-    // Only use fallback if a whole text row explicitly joins this label and its value.
-    // Never use a nearby unlabeled tax amount or a generic 'total' on the page.
-    if(!display){
-      const exact=p.rows.map(row=>row.match(/VALOR\s+TOTAL\s+DA\s+NOTA\s*[:\-]?\s*(\d[\d.]*,\d{2})(?:\s|$)/i)?.[1]).find(Boolean);
-      display=exact||null;
-    }
+    if(!display)display=p.rows.map(row=>row.match(/VALOR\s+TOTAL\s+DA\s+NOTA\s*[:\-]?\s*(\d[\d.]*,\d{2})(?:\s|$)/i)?.[1]).find(Boolean)||null;
     if(!display)continue;
     const value=brNumber(display);if(value===null)continue;
-    found.push({key:nfeKey(p,display),value,display,page:p});
+    const number=(text.match(/(?:N[º°.]?\s*|NÚMERO\s*)(0*\d{6,12})\s*(?:S[ÉE]RIE|SERIE)/i)?.[1]||
+      text.match(/\bN[º°.]?\s*(0*\d{6,12})\b/i)?.[1]||'').replace(/^0+/,'');
+    const mentionedMother=number&&motherNumbers.has(number);
+    const ownFlag=/\b(?:NOTA\s+FISCAL|NF)\s+M[AÃ]E\b/i.test(text)&&!/\bFILHOT[EA]\b/i.test(text);
+    const childFlag=/\bFILHOT[EA]\s*\d+\s*\/\s*\d+/i.test(text);
+    const kind:Invoice['kind']=mentionedMother||ownFlag?'mae':childFlag?'filhote':'indefinida';
+    found.push({key:nfeKey(p,display),number,value,display,page:p,kind});
   }
-  const unique=[...new Map(found.map(x=>[x.key,x])).values()];
-  if(!unique.length)return empty('Valor Total da Nota não localizado com segurança na célula VALOR TOTAL DA NOTA da NF.');
-  const total=unique.reduce((sum,item)=>sum+item.value,0);
-  const src=unique.length===1?source(unique[0].page,'VALOR TOTAL DA NOTA'):`Soma de ${unique.length} NFs únicas · ${unique.map(item=>`${item.page.filename} · página ${item.page.page} · R$ ${item.display}`).join(' + ')}`;
-  return{value:formatBr(total,2),source:src,confidence:'Alta'};
+  const unique=[...new Map(found.map(item=>[item.key,item])).values()];
+  if(!unique.length)return empty('VALOR TOTAL DA NOTA não localizado com segurança nas NFs.');
+  const mother=unique.filter(item=>item.kind==='mae');
+  const children=unique.filter(item=>item.kind!=='mae');
+  // In a mother/child process, do not add an unclassified NF without confirmation.
+  const classified=mother.length||expectedCounts.length||unique.some(i=>i.kind==='filhote');
+  const eligible=classified?children.filter(i=>i.kind==='filhote'||(i.number&&!motherNumbers.has(i.number))):children;
+  if(classified&&!eligible.length)return empty('NF mãe identificada, mas nenhuma NF filhote foi localizada para somar.');
+  const total=eligible.reduce((sum,item)=>sum+item.value,0);
+  const parts=eligible.map(item=>item.page.filename+' · página '+item.page.page+' · R$ '+item.display);
+  const motherNote=mother.length?' · NF mãe excluída: '+mother.map(i=>'Nº '+(i.number||'?')+' (R$ '+i.display+')').join(', '):'';
+  const expected=Math.max(0,...expectedCounts);
+  const missing=expected&&eligible.length<expected?' · ATENÇÃO: '+eligible.length+'/'+expected+' NFs filhotes identificadas; total parcial':'';
+  const comparison=mother.length&&(!expected||eligible.length===expected)?' · Conferência com NF mãe: '+(Math.abs(total-mother[0].value)<0.01?'valores conferem':'DIVERGÊNCIA entre soma das filhotes e NF mãe'):'';
+  const src=classified||eligible.length>1?'Soma de '+eligible.length+' NFs únicas · '+parts.join(' + ')+motherNote+missing+comparison:source(eligible[0].page,'VALOR TOTAL DA NOTA');
+  return{value:formatBr(total,2),source:src,confidence:missing?'Baixa':mother.length&&comparison.includes('DIVERGÊNCIA')?'Baixa':'Alta'};
 }
 function field(label:BrasalplaReportFieldLabel,pick:Pick):BrasalplaAnalysisField{return{label,value:pick.value||'—',source:pick.source,confidence:pick.confidence}}
 
