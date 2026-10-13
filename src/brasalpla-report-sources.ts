@@ -93,10 +93,10 @@ function matchedItems(line:TextLine,value:string,label:string){
   const tokenItems=line.items.filter(item=>{const ni=norm(txt(item));return tokens.some(t=>ni===t||(t.length>=3&&ni.includes(t)))});
   return tokenItems.length?tokenItems:line.items;
 }
-function exactCevaFieldSelection(items:PdfTextItem[],value:string,label:string,viewport:any,scale:number){
+function exactBrasalplaFieldSelection(items:PdfTextItem[],value:string,label:string,viewport:any,scale:number){
   if(!/^(Cliente|Remetente \/ Exportador|Agência Marítima)$/i.test(label))return null;
   const ls=lines(items),valueNorm=norm(value);
-  const heading=label==='Cliente'?'TRANSPORTADORVOLUMESTRANSPORTADOS':label==='Remetente / Exportador'?'DESTINATARIOREMETENTE':'CARRIER';
+  const heading=label==='Cliente'?'NOMEDOIMPORTADOR':label==='Remetente / Exportador'?'DESTINATARIOREMETENTE':'CARRIER';
   const indices=ls.map((line,index)=>line.normalized.includes(heading)?index:-1).filter(index=>index>=0);
   if(!indices.length)return null;
   const textCandidates=ls.filter(line=>line.normalized.includes(valueNorm));
@@ -275,7 +275,7 @@ async function renderPdf(row:HTMLElement,parsed:{filename:string;page:number;not
   await page.render({canvas,canvasContext:ctx,viewport}).promise;
   const content=await page.getTextContent(),items=content.items as PdfTextItem[],base=rowData(row),label=override?.label||base.label,value=override?.value||base.value,selection=select(items,value,label,parsed.note);
   const exactNote=/Valor Total da Nota/i.test(label)?exactNoteTotalSelection(items,value,viewport,scale):null;
-  const exactCeva=exactCevaFieldSelection(items,value,label,viewport,scale);
+  const exactCeva=exactBrasalplaFieldSelection(items,value,label,viewport,scale);
   let target=exactNote?.target||exactCeva?.target||(selection.targetItems.length?merge(selection.targetItems.map(i=>itemBox(i,viewport,scale))):null);
   let contextBoxes=exactNote?.context||exactCeva?.context||selection.context.flatMap(l=>l.items.map(i=>itemBox(i,viewport,scale)));
   if(!target){
