@@ -249,21 +249,23 @@ async function ocrBox(canvas:HTMLCanvasElement,value:string,label:string,note:st
 }
 
 function exactNoteTotalSelection(items:PdfTextItem[],value:string,viewport:any,scale:number){
-  const labels=items.filter(item=>norm(txt(item))==='NOTA').map(item=>({item,box:itemBox(item,viewport,scale)}));
-  const anchored=labels.filter(label=>items.some(other=>{
-    const token=norm(txt(other)),box=itemBox(other,viewport,scale);
-    return /TOTAL/.test(token)&&Math.abs(box.y-label.box.y)<13&&box.x<label.box.x&&label.box.x-box.x<185;
+  const tokens=items.filter(item=>txt(item)&&item.transform);
+  const normToken=(s:string)=>norm(s);
+  const noteLabels=tokens.filter(item=>normToken(txt(item)).includes('VALORTOTALDANOTA'));
+  const splitLabels=tokens.filter(item=>normToken(txt(item))==='NOTA'&&tokens.some(other=>{
+    const a=itemBox(item,viewport,scale),b=itemBox(other,viewport,scale);
+    return normToken(txt(other)).includes('TOTAL')&&Math.abs(a.y-b.y)<9&&b.x<a.x&&a.x-b.x<220;
   }));
-  const values=items.filter(item=>sameNumber(txt(item),value)).map(item=>({item,box:itemBox(item,viewport,scale)}));
-  if(!anchored.length||!values.length)return null;
-  const ranked=anchored.flatMap(label=>values.map(candidate=>{
-    const dy=candidate.box.y-label.box.y;
-    const dx=Math.abs(candidate.box.x-label.box.x);
-    return{label,candidate,score:(dy<0?10000:0)+Math.abs(dy)*4+dx*0.8+(dx>230?3000:0)};
-  })).sort((x,y)=>x.score-y.score);
-  const best=ranked[0];
-  if(!best||best.score>=3000)return null;
-  return{target:best.candidate.box,context:[best.label.box,best.candidate.box]};
+  const labels=noteLabels.length?noteLabels:splitLabels;
+  const matches=tokens.filter(item=>sameNumber(txt(item),value));
+  for(const label of labels){
+    const anchor=itemBox(label,viewport,scale);
+    const nearby=matches.map(item=>({item,box:itemBox(item,viewport,scale)}))
+      .filter(hit=>hit.box.y>anchor.y+2&&hit.box.y<anchor.y+65&&hit.box.x>=anchor.x-65&&hit.box.x<=anchor.x+340)
+      .sort((a,b)=>Math.abs(a.box.y-anchor.y)-Math.abs(b.box.y-anchor.y));
+    if(nearby.length)return{target:nearby[0].box,context:[anchor,nearby[0].box]};
+  }
+  return null;
 }
 
 async function renderPdf(row:HTMLElement,parsed:{filename:string;page:number;note:string},container:HTMLElement,override?:{label:string;value:string}){
