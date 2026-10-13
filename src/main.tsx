@@ -19,6 +19,7 @@ import './iguasport-client.css';
 import './xcmg-client.css';
 import './kemin-client.css';
 import './ceva-client.css';
+import './brasalpla-client.css';
 import './ui-performance.css';
 import './clients-tab';
 import './clients-home-entry';
@@ -38,6 +39,7 @@ import './kemin-report-sources';
 import './kemin-client';
 import './ceva-report-sources';
 import './ceva-client';
+import './brasalpla-client';
 import './ui-performance';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
