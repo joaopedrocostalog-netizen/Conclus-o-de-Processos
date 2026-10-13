@@ -59,11 +59,11 @@ function anchorsFor(label:string,note:string){
   if(/Nº BL|AWB/i.test(label))return['CONHECIMENTO','B/L-NO','B/L NO','BILL OF LADING'];
   if(/Contêineres/i.test(label))return['CONTEINERES','CONTAINER','CONT/SEALS/MARKS'];
   if(/CNPJ/i.test(label))return['CNPJ DO IMPORTADOR','CNPJ/CPF','CNPJ'];
-  if(/Remetente|Exportador/i.test(label))return['NOME/RAZAO SOCIAL','DESTINATARIO/REMETENTE','EXPORTADOR ESTRANGEIRO','SHIPPER'];
+  if(/Remetente|Exportador/i.test(label))return['NOME/RAZAO SOCIAL','DESTINATARIO/REMETENTE'];
   if(/Destinatário|Importador/i.test(label))return['NOME DO IMPORTADOR'];
-  if(/^Cliente$/i.test(label))return['TRANSPORTADOR/VOLUMES TRANSPORTADOS','RAZAO SOCIAL'];
+  if(/^Cliente$/i.test(label))return['RAZAO SOCIAL','TRANSPORTADOR/VOLUMES TRANSPORTADOS'];
   if(/Local de Armazenagem/i.test(label))return['RECINTO'];
-  if(/Agência Marítima/i.test(label))return['VEICULO','VESSEL NAME','VESSEL','VOYAGE'];
+  if(/Agência Marítima/i.test(label))return['CARRIER'];
   if(/Tipo Documento/i.test(label))return['EXTRATO DA DUIMP','DUIMP'];
   if(/Operação Marítima/i.test(label))return['DUIMP','IMPORTACAO'];
   return note?[note]:[];
@@ -93,6 +93,29 @@ function matchedItems(line:TextLine,value:string,label:string){
   const tokenItems=line.items.filter(item=>{const ni=norm(txt(item));return tokens.some(t=>ni===t||(t.length>=3&&ni.includes(t)))});
   return tokenItems.length?tokenItems:line.items;
 }
+function exactCevaFieldSelection(items:PdfTextItem[],value:string,label:string,viewport:any,scale:number){
+  if(!/^(Cliente|Remetente \/ Exportador|Agência Marítima)$/i.test(label))return null;
+  const ls=lines(items),valueNorm=norm(value);
+  const heading=label==='Cliente'?'TRANSPORTADORVOLUMESTRANSPORTADOS':label==='Remetente / Exportador'?'DESTINATARIOREMETENTE':'CARRIER';
+  const indices=ls.map((line,index)=>line.normalized.includes(heading)?index:-1).filter(index=>index>=0);
+  if(!indices.length)return null;
+  const textCandidates=ls.filter(line=>line.normalized.includes(valueNorm));
+  if(!textCandidates.length)return null;
+  const section=indices[0];
+  const ranked=textCandidates.map(line=>{
+    const index=ls.indexOf(line);
+    const delta=index-section;
+    const penalty=delta<0?10000:0;
+    return{line,score:Math.abs(delta)*100+penalty};
+  }).sort((a,b)=>a.score-b.score);
+  const line=ranked[0]?.line;
+  if(!line)return null;
+  const selected=matchedItems(line,value,label);
+  const target=merge(selected.map(item=>itemBox(item,viewport,scale)));
+  const anchor=merge(ls[section].items.map(item=>itemBox(item,viewport,scale)));
+  return target?{target,context:anchor?[anchor,target]:[target]}:null;
+}
+
 function select(items:PdfTextItem[],value:string,label:string,note:string){
   const ls=lines(items),anchors=anchorsFor(label,note).map(norm),anchorIndexes=ls.map((line,index)=>anchors.some(a=>a&&line.normalized.includes(a))?index:-1).filter(i=>i>=0),values=valueLines(ls,value,label);
   let target:TextLine|undefined;
@@ -271,8 +294,9 @@ async function renderPdf(row:HTMLElement,parsed:{filename:string;page:number;not
   await page.render({canvas,canvasContext:ctx,viewport}).promise;
   const content=await page.getTextContent(),items=content.items as PdfTextItem[],base=rowData(row),label=override?.label||base.label,value=override?.value||base.value,selection=select(items,value,label,parsed.note);
   const exactNote=/Valor Total da Nota/i.test(label)?exactNoteTotalSelection(items,value,viewport,scale):null;
-  let target=exactNote?.target||(selection.targetItems.length?merge(selection.targetItems.map(i=>itemBox(i,viewport,scale))):null);
-  let contextBoxes=exactNote?.context||selection.context.flatMap(l=>l.items.map(i=>itemBox(i,viewport,scale)));
+  const exactCeva=exactCevaFieldSelection(items,value,label,viewport,scale);
+  let target=exactNote?.target||exactCeva?.target||(selection.targetItems.length?merge(selection.targetItems.map(i=>itemBox(i,viewport,scale))):null);
+  let contextBoxes=exactNote?.context||exactCeva?.context||selection.context.flatMap(l=>l.items.map(i=>itemBox(i,viewport,scale)));
   if(!target){
     const ocr=await ocrBox(canvas,value,label,parsed.note);target=ocr.target;if(ocr.context.length)contextBoxes=ocr.context;
   }
