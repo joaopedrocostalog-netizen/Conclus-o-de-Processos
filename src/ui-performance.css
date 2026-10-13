@@ -106,6 +106,6 @@ img[data-ui-img-ready="true"]{opacity:1;transition:opacity 120ms ease-out}
 }
 .clients-list-view .clients-grid .client-card-glovis .client-logo-image img{transform:scale(1.42) !important}
 .clients-list-view .clients-grid .client-card-iguasport .client-logo-image img{transform:scale(1.30) !important}
-.clients-list-view .clients-grid .client-card-xcmg .client-logo-image img{transform:translate3d(0,0,0) scale(2.30) !important;transform-origin:center center !important;object-position:50% 50% !important}
+.clients-list-view .clients-grid .client-card-xcmg .client-logo-image img{transform:translate3d(6px,0,0) scale(2.30) !important;transform-origin:center center !important;object-position:50% 50% !important}
 .clients-list-view .clients-grid .client-card-kemin .client-logo-image img{transform:scale(1.32) !important}
 .clients-list-view .clients-grid .client-card-ceva .client-logo-image img{transform:scale(1.35) !important}
